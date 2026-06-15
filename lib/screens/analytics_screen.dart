@@ -291,6 +291,8 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
       batch.stableId,
       batch.name,
       _safeKey(batch.name),
+      if (_batches.isNotEmpty && _selectedBatch == _batches.first)
+        'default_batch',
     };
 
     final filtered = logs.where((log) {
@@ -1751,19 +1753,45 @@ class _HumidityBarChart extends StatelessWidget {
       );
     }
 
-    final sampledValues = List<double>.generate(7, (index) {
-      if (values.isEmpty) {
-        return 0;
-      }
-      if (values.length == 1) {
+    final sampleCount = math.min(7, values.length);
+    final sampledValues = List<double>.generate(sampleCount, (index) {
+      if (sampleCount == 1) {
         return values.first;
       }
-      final sourceIndex = ((values.length - 1) * (index / 6)).round();
+      final sourceIndex =
+          ((values.length - 1) * (index / (sampleCount - 1))).round();
       return values[sourceIndex];
     });
+    final minimumReading = sampledValues.reduce(math.min);
+    final maximumReading = sampledValues.reduce(math.max);
+    var rawMinimumScale = minimumReading.floorToDouble() - 1;
+    var rawMaximumScale = maximumReading.ceilToDouble() + 1;
+    if (rawMaximumScale - rawMinimumScale < 4) {
+      final midpoint = (minimumReading + maximumReading) / 2;
+      rawMinimumScale = midpoint.floorToDouble() - 2;
+      rawMaximumScale = rawMinimumScale + 4;
+    }
+    final rawRange = rawMaximumScale - rawMinimumScale;
+    final scaleStep = rawRange <= 6
+        ? 1.0
+        : rawRange <= 12
+        ? 2.0
+        : rawRange <= 25
+        ? 5.0
+        : 10.0;
+    final minimumScale = math.max(
+      0.0,
+      (rawMinimumScale / scaleStep).floorToDouble() * scaleStep,
+    );
+    final maximumScale = math.min(
+      100.0,
+      (rawMaximumScale / scaleStep).ceilToDouble() * scaleStep,
+    );
+    final yAxisLabels = List<double>.generate(
+      ((maximumScale - minimumScale) / scaleStep).round() + 1,
+      (index) => maximumScale - (index * scaleStep),
+    );
     final xLabels = labels;
-    const minScale = 0.0;
-    const maxScale = 90.0;
     const barGradients = [
       (start: Color(0xFF0B4F1D), end: Color(0xFF2E7D32)),
       (start: Color(0xFF0D5520), end: Color(0xFF347C38)),
@@ -1788,37 +1816,27 @@ class _HumidityBarChart extends StatelessWidget {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const Padding(
-                  padding: EdgeInsets.only(top: 6, right: 8, bottom: 28),
+                Padding(
+                  padding: const EdgeInsets.only(
+                    top: 6,
+                    right: 8,
+                    bottom: 28,
+                  ),
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      Text(
-                        '90%',
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: Color(0xFF7B8794),
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                      Text(
-                        '45%',
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: Color(0xFF7B8794),
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                      Text(
-                        '0%',
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: Color(0xFF7B8794),
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ],
+                    children: yAxisLabels
+                        .map(
+                          (value) => Text(
+                            '${value.toStringAsFixed(0)}%',
+                            style: const TextStyle(
+                              fontSize: 11,
+                              color: Color(0xFF7B8794),
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        )
+                        .toList(),
                   ),
                 ),
                 Expanded(
@@ -1827,21 +1845,46 @@ class _HumidityBarChart extends StatelessWidget {
                       Expanded(
                         child: LayoutBuilder(
                           builder: (context, constraints) {
+                            final targetVisible =
+                                70 >= minimumScale && 70 <= maximumScale;
                             final targetTop =
-                                ((maxScale - 70) / (maxScale - minScale)) *
+                                ((maximumScale - 70) /
+                                    (maximumScale - minimumScale)) *
                                 constraints.maxHeight;
+                            final gridDivisions = math.max(
+                              1,
+                              yAxisLabels.length - 1,
+                            );
 
                             return Stack(
                               children: [
-                                Positioned(
-                                  left: 0,
-                                  right: 0,
-                                  top: targetTop,
-                                  child: CustomPaint(
-                                    size: Size(constraints.maxWidth, 1.6),
-                                    painter: _DashedGuidePainter(),
+                                for (
+                                  var i = 0;
+                                  i < yAxisLabels.length;
+                                  i++
+                                )
+                                  Positioned(
+                                    left: 0,
+                                    right: 0,
+                                    top:
+                                        (constraints.maxHeight /
+                                            gridDivisions) *
+                                        i,
+                                    child: Container(
+                                      height: 1,
+                                      color: const Color(0xFFE6EEF0),
+                                    ),
                                   ),
-                                ),
+                                if (targetVisible)
+                                  Positioned(
+                                    left: 0,
+                                    right: 0,
+                                    top: targetTop,
+                                    child: CustomPaint(
+                                      size: Size(constraints.maxWidth, 1.6),
+                                      painter: _DashedGuidePainter(),
+                                    ),
+                                  ),
                                 Row(
                                   crossAxisAlignment: CrossAxisAlignment.end,
                                   children: [
@@ -1857,13 +1900,15 @@ class _HumidityBarChart extends StatelessWidget {
                                             width: 26,
                                             height:
                                                 (((sampledValues[i].clamp(
-                                                              minScale,
-                                                              maxScale,
+                                                              minimumScale,
+                                                              maximumScale,
                                                             ) -
-                                                            minScale) /
-                                                        (maxScale - minScale)) *
-                                                    120) +
-                                                10,
+                                                            minimumScale) /
+                                                        (maximumScale -
+                                                            minimumScale)) *
+                                                    (constraints.maxHeight -
+                                                        8)) +
+                                                8,
                                             decoration: BoxDecoration(
                                               gradient: LinearGradient(
                                                 colors: [
@@ -1997,16 +2042,38 @@ class _TemperatureLineChart extends StatelessWidget {
       );
     }
 
-    final sampledValues = List<double>.generate(7, (index) {
-      if (values.isEmpty) {
-        return 0;
-      }
-      if (values.length == 1) {
+    final sampleCount = math.min(7, values.length);
+    final sampledValues = List<double>.generate(sampleCount, (index) {
+      if (sampleCount == 1) {
         return values.first;
       }
-      final sourceIndex = ((values.length - 1) * (index / 6)).round();
+      final sourceIndex =
+          ((values.length - 1) * (index / (sampleCount - 1))).round();
       return values[sourceIndex];
     });
+    final minimumReading = sampledValues.reduce(math.min);
+    final maximumReading = sampledValues.reduce(math.max);
+    final rawMinimumScale = minimumReading.floorToDouble();
+    var rawMaximumScale = maximumReading.ceilToDouble() + 1;
+    if (rawMaximumScale - rawMinimumScale < 3) {
+      rawMaximumScale = rawMinimumScale + 3;
+    }
+    final rawRange = rawMaximumScale - rawMinimumScale;
+    final scaleStep = rawRange <= 5
+        ? 1.0
+        : rawRange <= 10
+        ? 2.0
+        : rawRange <= 20
+        ? 5.0
+        : 10.0;
+    final minimumScale =
+        (rawMinimumScale / scaleStep).floorToDouble() * scaleStep;
+    final maximumScale =
+        (rawMaximumScale / scaleStep).ceilToDouble() * scaleStep;
+    final yAxisLabels = List<double>.generate(
+      ((maximumScale - minimumScale) / scaleStep).round() + 1,
+      (index) => maximumScale - (index * scaleStep),
+    );
 
     final xLabels = labels;
 
@@ -2024,37 +2091,27 @@ class _TemperatureLineChart extends StatelessWidget {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const Padding(
-                  padding: EdgeInsets.only(top: 6, right: 8, bottom: 28),
+                Padding(
+                  padding: const EdgeInsets.only(
+                    top: 6,
+                    right: 8,
+                    bottom: 28,
+                  ),
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      Text(
-                        '40',
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: Color(0xFF7B8794),
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                      Text(
-                        '20',
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: Color(0xFF7B8794),
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                      Text(
-                        '0',
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: Color(0xFF7B8794),
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ],
+                    children: yAxisLabels
+                        .map(
+                          (value) => Text(
+                            '${value.toStringAsFixed(0)}\u00B0',
+                            style: const TextStyle(
+                              fontSize: 11,
+                              color: Color(0xFF7B8794),
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        )
+                        .toList(),
                   ),
                 ),
                 Expanded(
@@ -2066,6 +2123,9 @@ class _TemperatureLineChart extends StatelessWidget {
                             values: sampledValues,
                             minimumTarget: settings.minTemperature,
                             maximumTarget: settings.maxTemperature,
+                            minimumScale: minimumScale,
+                            maximumScale: maximumScale,
+                            gridLineCount: yAxisLabels.length,
                           ),
                           child: const SizedBox.expand(),
                         ),
@@ -2355,16 +2415,18 @@ String _formatEnvironmentalLogDay(DateTime value) {
 
 List<String> _sampleLogLabels(List<EnvironmentalLog> logs) {
   if (logs.isEmpty) {
-    return const ['--', '--', '--', '--', '--', '--', '--'];
+    return const [];
   }
 
   final recentLogs = logs.takeLast(12);
-  return List<String>.generate(7, (index) {
-    if (recentLogs.length == 1) {
+  final sampleCount = math.min(7, recentLogs.length);
+  return List<String>.generate(sampleCount, (index) {
+    if (sampleCount == 1) {
       return DateFormat('h:mm a').format(recentLogs.first.recordedAt);
     }
 
-    final sourceIndex = ((recentLogs.length - 1) * (index / 6)).round();
+    final sourceIndex =
+        ((recentLogs.length - 1) * (index / (sampleCount - 1))).round();
     return DateFormat('h:mm a').format(recentLogs[sourceIndex].recordedAt);
   });
 }
@@ -2581,19 +2643,23 @@ class _TemperatureLinePainter extends CustomPainter {
   final List<double> values;
   final double minimumTarget;
   final double maximumTarget;
+  final double minimumScale;
+  final double maximumScale;
+  final int gridLineCount;
 
   const _TemperatureLinePainter({
     required this.values,
     required this.minimumTarget,
     required this.maximumTarget,
+    required this.minimumScale,
+    required this.maximumScale,
+    required this.gridLineCount,
   });
 
   @override
   void paint(Canvas canvas, Size size) {
     const chartGreenStart = Color(0xFF0B4F1D);
     const chartGreenEnd = Color(0xFF2E7D32);
-    final minScale = 0.0;
-    final maxScale = 40.0;
     final leftPad = 2.0;
     final rightPad = 2.0;
     final topPad = 8.0;
@@ -2631,14 +2697,16 @@ class _TemperatureLinePainter extends CustomPainter {
       ..strokeWidth = 1.6;
 
     double yFor(double value) {
-      final normalized = ((value - minScale) / (maxScale - minScale))
+      final normalized =
+          ((value - minimumScale) / (maximumScale - minimumScale))
           .clamp(0.0, 1.0)
           .toDouble();
       return topPad + (1 - normalized) * chartHeight;
     }
 
-    for (var i = 0; i < 3; i++) {
-      final y = topPad + (chartHeight / 2) * i;
+    final gridDivisions = math.max(1, gridLineCount - 1);
+    for (var i = 0; i < gridLineCount; i++) {
+      final y = topPad + (chartHeight / gridDivisions) * i;
       canvas.drawLine(
         Offset(leftPad, y),
         Offset(size.width - rightPad, y),
@@ -2657,8 +2725,12 @@ class _TemperatureLinePainter extends CustomPainter {
       }
     }
 
-    drawDashedLine(yFor(minimumTarget));
-    drawDashedLine(yFor(maximumTarget));
+    if (minimumTarget >= minimumScale && minimumTarget <= maximumScale) {
+      drawDashedLine(yFor(minimumTarget));
+    }
+    if (maximumTarget >= minimumScale && maximumTarget <= maximumScale) {
+      drawDashedLine(yFor(maximumTarget));
+    }
 
     Offset pointFor(int index, double value) {
       final denominator = values.length <= 1 ? 1 : values.length - 1;
@@ -2715,7 +2787,10 @@ class _TemperatureLinePainter extends CustomPainter {
   bool shouldRepaint(covariant _TemperatureLinePainter oldDelegate) {
     return oldDelegate.values != values ||
         oldDelegate.minimumTarget != minimumTarget ||
-        oldDelegate.maximumTarget != maximumTarget;
+        oldDelegate.maximumTarget != maximumTarget ||
+        oldDelegate.minimumScale != minimumScale ||
+        oldDelegate.maximumScale != maximumScale ||
+        oldDelegate.gridLineCount != gridLineCount;
   }
 }
 
