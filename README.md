@@ -11,18 +11,24 @@ Flutter poultry environment monitoring app with ESP32, DHT22, and HC-SR04 suppor
    - VCC -> ESP32 3.3V
    - GND -> ESP32 GND
    - DATA -> ESP32 GPIO 14
-5. Wire the HC-SR04:
+5. Wire the water HC-SR04:
    - VCC -> ESP32 5V
    - GND -> ESP32 GND
    - TRIG -> ESP32 GPIO 5
    - ECHO -> ESP32 GPIO 18 through a voltage divider (for example, 1 kOhm from ECHO to GPIO 18 and 2 kOhm from GPIO 18 to GND)
-6. Measure the sensor-to-water distance when the tank is empty and full, then update `WATER_TANK_EMPTY_DISTANCE_CM` and `WATER_TANK_FULL_DISTANCE_CM` in the sketch.
+6. Wire the feeder HC-SR04:
+   - VCC -> ESP32 5V rail
+   - GND -> ESP32 GND rail
+   - TRIG -> ESP32 GPIO 22
+   - ECHO -> ESP32 GPIO 23 through its own voltage divider (for example, 1 kOhm from ECHO to GPIO 23 and 2 kOhm from GPIO 23 to GND)
+7. Measure the sensor-to-water distance when the tank is empty and full, then update `WATER_TANK_EMPTY_DISTANCE_CM` and `WATER_TANK_FULL_DISTANCE_CM` in the sketch.
    - Mount the sensor level and pointing straight down.
    - Keep the full-water surface at least 2-3 cm from the sensor.
    - Use the Serial Monitor distance reading for both calibration measurements.
    - Avoid mounting directly above strong water flow, foam, or tank-wall obstructions.
-7. Upload the sketch.
-8. If `WIFI_SSID` is left empty, connect your phone to the ESP32 WiFi network:
+8. Measure the sensor-to-feed distance when the feeder is empty and full, then update `FEEDER_EMPTY_DISTANCE_CM` and `FEEDER_FULL_DISTANCE_CM`.
+9. Upload the sketch.
+10. If `WIFI_SSID` is left empty, connect your phone to the ESP32 WiFi network:
    - SSID: `ChickTemp-ESP32`
    - Password: `chicktemp123`
    - Sensor URL: `http://192.168.4.1/sensor`

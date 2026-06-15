@@ -51,7 +51,26 @@ class _ControlsScreenState extends State<ControlsScreen> {
     final settings = TemperatureSettingsStore.instance.settingsFor(widget.batchName);
     _minTempController.text = _formatTemperatureInput(settings.minTemperature);
     _maxTempController.text = _formatTemperatureInput(settings.maxTemperature);
+    _loadTemperatureSettings();
     _loadSavedDeviceConfigs();
+  }
+
+  Future<void> _loadTemperatureSettings() async {
+    await TemperatureSettingsStore.instance.loadFor(widget.batchName);
+    if (!mounted) {
+      return;
+    }
+    final settings = TemperatureSettingsStore.instance.settingsFor(
+      widget.batchName,
+    );
+    setState(() {
+      _minTempController.text = _formatTemperatureInput(
+        settings.minTemperature,
+      );
+      _maxTempController.text = _formatTemperatureInput(
+        settings.maxTemperature,
+      );
+    });
   }
 
   @override

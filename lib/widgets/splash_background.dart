@@ -37,6 +37,7 @@ class _SplashBackgroundState extends State<SplashBackground>
   Widget build(BuildContext context) {
     return AnimatedBuilder(
       animation: _ambientController,
+      child: RepaintBoundary(child: widget.child),
       builder: (context, child) {
         final ambient = Curves.easeInOut.transform(_ambientController.value);
         final floatY = math.sin(ambient * math.pi * 2) * 12;
@@ -123,7 +124,7 @@ class _SplashBackgroundState extends State<SplashBackground>
                   ),
                 ),
               ),
-              widget.child,
+              child!,
             ],
           ),
         );

@@ -5,6 +5,7 @@ import 'screens/splash_screen.dart';
 import 'widgets/chicktemp_page_transitions.dart';
  
 void main() {
+  WidgetsFlutterBinding.ensureInitialized();
   MonitoringStore.instance.start();
   runApp(const ChickTempApp());
 }

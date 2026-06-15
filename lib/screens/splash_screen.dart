@@ -2,6 +2,9 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../models/auth_store.dart';
+import '../models/batch_store.dart';
+import 'dashboards_screen.dart';
 import 'login_screen.dart';
 
 class SplashScreen extends StatefulWidget {
@@ -22,6 +25,7 @@ class _SplashScreenState extends State<SplashScreen>
   late final Animation<double> _haloScaleAnim;
   late final Animation<double> _haloOpacityAnim;
   late final Animation<double> _buttonGlowAnim;
+  bool _checkingRememberedSession = true;
 
   @override
   void initState() {
@@ -69,6 +73,7 @@ class _SplashScreenState extends State<SplashScreen>
     );
 
     _introController.forward();
+    _restoreRememberedSession();
   }
 
   @override
@@ -78,7 +83,35 @@ class _SplashScreenState extends State<SplashScreen>
     super.dispose();
   }
 
+  Future<void> _restoreRememberedSession() async {
+    final restored = await AuthStore.instance.restoreRememberedSession();
+    if (restored) {
+      try {
+        await BatchStore.instance.loadForCurrentUser();
+      } on Object {
+        BatchStore.instance.clear();
+      }
+    }
+
+    if (!mounted) {
+      return;
+    }
+    if (restored) {
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (_) =>
+              DashboardScreen(promptCreateBatch: BatchStore.instance.isEmpty),
+        ),
+      );
+      return;
+    }
+    setState(() => _checkingRememberedSession = false);
+  }
+
   void _openLogin() {
+    if (_checkingRememberedSession) {
+      return;
+    }
     Navigator.of(
       context,
     ).pushReplacement(MaterialPageRoute(builder: (_) => const LoginScreen()));
@@ -333,7 +366,9 @@ class _SplashScreenState extends State<SplashScreen>
                                   ],
                                 ),
                                 child: ElevatedButton(
-                                  onPressed: _openLogin,
+                                  onPressed: _checkingRememberedSession
+                                      ? null
+                                      : _openLogin,
                                   style: ElevatedButton.styleFrom(
                                     backgroundColor: Colors.transparent,
                                     shadowColor: Colors.transparent,

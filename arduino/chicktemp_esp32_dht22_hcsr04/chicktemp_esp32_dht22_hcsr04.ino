@@ -9,12 +9,17 @@
 #define DHTPIN 14
 #define DHTTYPE DHT22
 
-// HC-SR04 wiring: TRIG -> GPIO 5, ECHO -> GPIO 18 through a voltage divider.
-// Adjust these distances to match the sensor position in your water tank.
-#define ULTRASONIC_TRIG_PIN 5
-#define ULTRASONIC_ECHO_PIN 18
+// Water HC-SR04: TRIG -> GPIO 5, ECHO -> GPIO 18 through a voltage divider.
+#define WATER_ULTRASONIC_TRIG_PIN 5
+#define WATER_ULTRASONIC_ECHO_PIN 18
 const float WATER_TANK_EMPTY_DISTANCE_CM = 30.0;
 const float WATER_TANK_FULL_DISTANCE_CM = 3.0;
+
+// Feeder HC-SR04: TRIG -> GPIO 22, ECHO -> GPIO 23 through a voltage divider.
+#define FEEDER_ULTRASONIC_TRIG_PIN 22
+#define FEEDER_ULTRASONIC_ECHO_PIN 23
+const float FEEDER_EMPTY_DISTANCE_CM = 30.0;
+const float FEEDER_FULL_DISTANCE_CM = 3.0;
 
 const char* WIFI_SSID = "ZTE_2.4G_uDF6tp";
 const char* WIFI_PASSWORD = "Kurtyu082541";
@@ -22,6 +27,7 @@ const char* WIFI_PASSWORD = "Kurtyu082541";
 const char* FIREBASE_DATABASE_URL = "https://chicktemp-a6c7e-default-rtdb.asia-southeast1.firebasedatabase.app";
 const char* FIREBASE_SENSOR_PATH = "/sensor/latest.json";
 const char* FIREBASE_ENVIRONMENTAL_LOGS_PATH = "/environmental_logs.json";
+const char* FIREBASE_BATCH_ID = "broiler_batch_1";
 const unsigned long FIREBASE_UPLOAD_INTERVAL_MS = 5000;
 const unsigned long FIREBASE_ENVIRONMENTAL_LOG_INTERVAL_MS = 15UL * 60UL * 1000UL;
 const unsigned long FIREBASE_ENVIRONMENTAL_LOG_RETRY_MS = 10000;
@@ -37,6 +43,11 @@ float lastTemperature = NAN;
 float lastHumidity = NAN;
 float lastWaterDistanceCm = NAN;
 float lastWaterLevelPercent = NAN;
+float lastFeederDistanceCm = NAN;
+float lastFeederLevelPercent = NAN;
+bool isDhtReadingLive = false;
+bool isWaterReadingLive = false;
+bool isFeederReadingLive = false;
 unsigned long lastSensorReadMs = 0;
 unsigned long lastFirebaseUploadMs = 0;
 unsigned long lastFirebaseLogMs = 0;
@@ -47,20 +58,24 @@ double temperatureLogSum = 0;
 double humidityLogSum = 0;
 unsigned long environmentalLogSampleCount = 0;
 
-float readWaterDistanceCm(float airTemperatureC) {
+float readUltrasonicDistanceCm(
+  int triggerPin,
+  int echoPin,
+  float airTemperatureC
+) {
   const int sampleCount = 5;
   float samples[sampleCount];
   int validSamples = 0;
 
   // Median filtering removes occasional echoes from ripples and tank walls.
   for (int sample = 0; sample < sampleCount; sample++) {
-    digitalWrite(ULTRASONIC_TRIG_PIN, LOW);
+    digitalWrite(triggerPin, LOW);
     delayMicroseconds(2);
-    digitalWrite(ULTRASONIC_TRIG_PIN, HIGH);
+    digitalWrite(triggerPin, HIGH);
     delayMicroseconds(10);
-    digitalWrite(ULTRASONIC_TRIG_PIN, LOW);
+    digitalWrite(triggerPin, LOW);
 
-    unsigned long echoDuration = pulseIn(ULTRASONIC_ECHO_PIN, HIGH, 30000);
+    unsigned long echoDuration = pulseIn(echoPin, HIGH, 30000);
     if (echoDuration > 0) {
       float speedCmPerMicrosecond = 0.0343;
       if (!isnan(airTemperatureC)) {
@@ -93,6 +108,23 @@ float readWaterDistanceCm(float airTemperatureC) {
   return samples[validSamples / 2];
 }
 
+float levelPercentFromDistance(
+  float distanceCm,
+  float emptyDistanceCm,
+  float fullDistanceCm
+) {
+  float usableDepth = emptyDistanceCm - fullDistanceCm;
+  if (isnan(distanceCm) || usableDepth <= 0) {
+    return NAN;
+  }
+
+  return constrain(
+    (emptyDistanceCm - distanceCm) / usableDepth * 100.0,
+    0.0,
+    100.0
+  );
+}
+
 void readSensorIfNeeded() {
   if (millis() - lastSensorReadMs < 2000) {
     return;
@@ -103,6 +135,7 @@ void readSensorIfNeeded() {
   float temperature = dht.readTemperature();
 
   if (!isnan(humidity) && !isnan(temperature)) {
+    isDhtReadingLive = true;
     lastHumidity = humidity;
     lastTemperature = temperature;
     temperatureLogSum += temperature;
@@ -114,33 +147,65 @@ void readSensorIfNeeded() {
     Serial.print(lastHumidity, 0);
     Serial.println("%");
   } else {
-    lastHumidity = NAN;
-    lastTemperature = NAN;
-    Serial.println("DHT22 reading failed. Showing 0 C, 0%.");
+    isDhtReadingLive = false;
+    Serial.println("DHT22 reading failed. Keeping the last valid reading.");
   }
 
-  float measuredWaterDistanceCm = readWaterDistanceCm(temperature);
-  float usableDepth = WATER_TANK_EMPTY_DISTANCE_CM - WATER_TANK_FULL_DISTANCE_CM;
-  if (!isnan(measuredWaterDistanceCm) && usableDepth > 0) {
+  float measuredWaterDistanceCm = readUltrasonicDistanceCm(
+    WATER_ULTRASONIC_TRIG_PIN,
+    WATER_ULTRASONIC_ECHO_PIN,
+    temperature
+  );
+  float measuredWaterLevelPercent = levelPercentFromDistance(
+    measuredWaterDistanceCm,
+    WATER_TANK_EMPTY_DISTANCE_CM,
+    WATER_TANK_FULL_DISTANCE_CM
+  );
+  if (!isnan(measuredWaterLevelPercent)) {
+    isWaterReadingLive = true;
     lastWaterDistanceCm = measuredWaterDistanceCm;
-    lastWaterLevelPercent = constrain(
-      (WATER_TANK_EMPTY_DISTANCE_CM - lastWaterDistanceCm) / usableDepth * 100.0,
-      0.0,
-      100.0
-    );
+    lastWaterLevelPercent = measuredWaterLevelPercent;
     Serial.print("Water distance: ");
     Serial.print(lastWaterDistanceCm, 1);
     Serial.print(" cm, Level: ");
     Serial.print(lastWaterLevelPercent, 0);
     Serial.println("%");
-  } else if (usableDepth <= 0) {
-    lastWaterDistanceCm = NAN;
-    lastWaterLevelPercent = NAN;
+  } else if (WATER_TANK_EMPTY_DISTANCE_CM <= WATER_TANK_FULL_DISTANCE_CM) {
+    isWaterReadingLive = false;
     Serial.println("Invalid tank calibration: empty distance must be greater than full distance.");
   } else {
-    lastWaterDistanceCm = NAN;
-    lastWaterLevelPercent = NAN;
-    Serial.println("HC-SR04 reading failed.");
+    isWaterReadingLive = false;
+    Serial.println("Water HC-SR04 reading failed. Keeping the last valid reading.");
+  }
+
+  // Prevent the water sensor's echo from being detected by the feeder sensor.
+  delay(75);
+
+  float measuredFeederDistanceCm = readUltrasonicDistanceCm(
+    FEEDER_ULTRASONIC_TRIG_PIN,
+    FEEDER_ULTRASONIC_ECHO_PIN,
+    temperature
+  );
+  float measuredFeederLevelPercent = levelPercentFromDistance(
+    measuredFeederDistanceCm,
+    FEEDER_EMPTY_DISTANCE_CM,
+    FEEDER_FULL_DISTANCE_CM
+  );
+  if (!isnan(measuredFeederLevelPercent)) {
+    isFeederReadingLive = true;
+    lastFeederDistanceCm = measuredFeederDistanceCm;
+    lastFeederLevelPercent = measuredFeederLevelPercent;
+    Serial.print("Feeder distance: ");
+    Serial.print(lastFeederDistanceCm, 1);
+    Serial.print(" cm, Level: ");
+    Serial.print(lastFeederLevelPercent, 0);
+    Serial.println("%");
+  } else if (FEEDER_EMPTY_DISTANCE_CM <= FEEDER_FULL_DISTANCE_CM) {
+    isFeederReadingLive = false;
+    Serial.println("Invalid feeder calibration: empty distance must be greater than full distance.");
+  } else {
+    isFeederReadingLive = false;
+    Serial.println("Feeder HC-SR04 reading failed. Keeping the last valid reading.");
   }
 }
 
@@ -156,7 +221,7 @@ void handleSensor() {
 
   String payload = "{";
   payload += "\"status\":\"";
-  payload += (isnan(lastTemperature) || isnan(lastHumidity)) ? "no_read" : "ok";
+  payload += isDhtReadingLive ? "ok" : "no_read";
   payload += "\",";
   payload += "\"temperature\":";
   payload += String(isnan(lastTemperature) ? 0 : lastTemperature, 1);
@@ -165,13 +230,22 @@ void handleSensor() {
   payload += String(isnan(lastHumidity) ? 0 : lastHumidity, 0);
   payload += ",";
   payload += "\"water_status\":\"";
-  payload += isnan(lastWaterLevelPercent) ? "no_read" : "ok";
+  payload += isWaterReadingLive ? "ok" : "no_read";
   payload += "\",";
   payload += "\"water_level_percent\":";
   payload += String(isnan(lastWaterLevelPercent) ? 0 : lastWaterLevelPercent, 0);
   payload += ",";
   payload += "\"water_distance_cm\":";
   payload += String(isnan(lastWaterDistanceCm) ? 0 : lastWaterDistanceCm, 1);
+  payload += ",";
+  payload += "\"feeder_status\":\"";
+  payload += isFeederReadingLive ? "ok" : "no_read";
+  payload += "\",";
+  payload += "\"feeder_level_percent\":";
+  payload += String(isnan(lastFeederLevelPercent) ? 0 : lastFeederLevelPercent, 0);
+  payload += ",";
+  payload += "\"feeder_distance_cm\":";
+  payload += String(isnan(lastFeederDistanceCm) ? 0 : lastFeederDistanceCm, 1);
   payload += ",";
   payload += "\"device\":\"esp32-dht22-hcsr04\"";
   payload += ",";
@@ -235,8 +309,11 @@ void uploadToFirebaseIfNeeded() {
   float humidity = isnan(lastHumidity) ? 0 : lastHumidity;
   float waterLevel = isnan(lastWaterLevelPercent) ? 0 : lastWaterLevelPercent;
   float waterDistance = isnan(lastWaterDistanceCm) ? 0 : lastWaterDistanceCm;
-  const char* status = (isnan(lastTemperature) || isnan(lastHumidity)) ? "no_read" : "ok";
-  const char* waterStatus = isnan(lastWaterLevelPercent) ? "no_read" : "ok";
+  float feederLevel = isnan(lastFeederLevelPercent) ? 0 : lastFeederLevelPercent;
+  float feederDistance = isnan(lastFeederDistanceCm) ? 0 : lastFeederDistanceCm;
+  const char* status = isDhtReadingLive ? "ok" : "no_read";
+  const char* waterStatus = isWaterReadingLive ? "ok" : "no_read";
+  const char* feederStatus = isFeederReadingLive ? "ok" : "no_read";
 
   String payload = "{";
   payload += "\"status\":\"";
@@ -256,6 +333,15 @@ void uploadToFirebaseIfNeeded() {
   payload += ",";
   payload += "\"water_distance_cm\":";
   payload += String(waterDistance, 1);
+  payload += ",";
+  payload += "\"feeder_status\":\"";
+  payload += feederStatus;
+  payload += "\",";
+  payload += "\"feeder_level_percent\":";
+  payload += String(feederLevel, 0);
+  payload += ",";
+  payload += "\"feeder_distance_cm\":";
+  payload += String(feederDistance, 1);
   payload += ",";
   payload += "\"device\":\"esp32-dht22-hcsr04\",";
   payload += "\"local_ip\":\"";
@@ -305,9 +391,13 @@ void saveEnvironmentalLogIfNeeded() {
   float humidity = humidityLogSum / environmentalLogSampleCount;
   float waterLevel = isnan(lastWaterLevelPercent) ? 0 : lastWaterLevelPercent;
   float waterDistance = isnan(lastWaterDistanceCm) ? 0 : lastWaterDistanceCm;
+  float feederLevel = isnan(lastFeederLevelPercent) ? 0 : lastFeederLevelPercent;
+  float feederDistance = isnan(lastFeederDistanceCm) ? 0 : lastFeederDistanceCm;
 
   String payload = "{";
-  payload += "\"batch_id\":\"default_batch\",";
+  payload += "\"batch_id\":\"";
+  payload += FIREBASE_BATCH_ID;
+  payload += "\",";
   payload += "\"device_id\":\"esp32-dht22-hcsr04\",";
   payload += "\"temperature\":";
   payload += String(temperature, 1);
@@ -326,7 +416,16 @@ void saveEnvironmentalLogIfNeeded() {
   payload += String(waterDistance, 1);
   payload += ",";
   payload += "\"water_status\":\"";
-  payload += isnan(lastWaterLevelPercent) ? "no_read" : "ok";
+  payload += isWaterReadingLive ? "ok" : "no_read";
+  payload += "\",";
+  payload += "\"feeder_level_percent\":";
+  payload += String(feederLevel, 0);
+  payload += ",";
+  payload += "\"feeder_distance_cm\":";
+  payload += String(feederDistance, 1);
+  payload += ",";
+  payload += "\"feeder_status\":\"";
+  payload += isFeederReadingLive ? "ok" : "no_read";
   payload += "\",";
   payload += "\"recorded_at\":{\".sv\":\"timestamp\"}";
   payload += "}";
@@ -404,9 +503,12 @@ void setup() {
   Serial.begin(115200);
   delay(300);
   dht.begin();
-  pinMode(ULTRASONIC_TRIG_PIN, OUTPUT);
-  pinMode(ULTRASONIC_ECHO_PIN, INPUT);
-  digitalWrite(ULTRASONIC_TRIG_PIN, LOW);
+  pinMode(WATER_ULTRASONIC_TRIG_PIN, OUTPUT);
+  pinMode(WATER_ULTRASONIC_ECHO_PIN, INPUT);
+  digitalWrite(WATER_ULTRASONIC_TRIG_PIN, LOW);
+  pinMode(FEEDER_ULTRASONIC_TRIG_PIN, OUTPUT);
+  pinMode(FEEDER_ULTRASONIC_ECHO_PIN, INPUT);
+  digitalWrite(FEEDER_ULTRASONIC_TRIG_PIN, LOW);
   startWiFi();
 
   server.on("/", HTTP_GET, handleRoot);

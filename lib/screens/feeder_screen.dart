@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'analytics_screen.dart';
 import '../models/auth_store.dart';
 import '../models/device_config_store.dart';
+import '../models/monitoring_store.dart';
 import '../widgets/user_avatar_content.dart';
 import 'reports_screen.dart';
 import 'profile_screen.dart';
@@ -30,7 +31,21 @@ class _FeederScreenState extends State<FeederScreen> {
   @override
   void initState() {
     super.initState();
+    MonitoringStore.instance.addListener(_onTelemetryChanged);
+    MonitoringStore.instance.start();
     _loadSavedConfig();
+  }
+
+  @override
+  void dispose() {
+    MonitoringStore.instance.removeListener(_onTelemetryChanged);
+    super.dispose();
+  }
+
+  void _onTelemetryChanged() {
+    if (mounted) {
+      setState(() {});
+    }
   }
 
   void _toggleExpanded() {
@@ -411,9 +426,12 @@ class _FeederScreenState extends State<FeederScreen> {
 
   Widget _buildExpandedContent() {
     final hasDevice = _hasDevices;
+    final telemetry = MonitoringStore.instance.snapshotFor(widget.batchName);
 
     return Column(
       children: [
+        _FeederLevelCard(telemetry: telemetry),
+        const SizedBox(height: 12),
         _FeederControlCard(
           enabled: _mainEnabled,
           onChanged: (value) {
@@ -501,6 +519,94 @@ class _FeederScreenState extends State<FeederScreen> {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _FeederLevelCard extends StatelessWidget {
+  final BatchTelemetry telemetry;
+
+  const _FeederLevelCard({required this.telemetry});
+
+  @override
+  Widget build(BuildContext context) {
+    final hasReading =
+        telemetry.isFeederLevelLive || telemetry.feederDistanceCm > 0;
+    final level = hasReading ? telemetry.feederLevelPercent : 0.0;
+    final status = telemetry.isFeederLevelLive
+        ? 'LIVE'
+        : hasReading
+        ? 'OFFLINE'
+        : 'NO DATA';
+    final statusColor = telemetry.isFeederLevelLive
+        ? const Color(0xFF2E7D32)
+        : const Color(0xFF64748B);
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF8EE),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: const Color(0xFFF0DFC4)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 48,
+            height: 48,
+            decoration: BoxDecoration(
+              color: const Color(0xFFFCE9CB),
+              borderRadius: BorderRadius.circular(15),
+            ),
+            child: const Icon(
+              Icons.restaurant_outlined,
+              color: Color(0xFFB45309),
+            ),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Feeder Level',
+                  style: TextStyle(
+                    color: Color(0xFF5D4930),
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  hasReading ? '${level.toStringAsFixed(0)}%' : '--',
+                  style: const TextStyle(
+                    color: Color(0xFF172033),
+                    fontSize: 26,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              color: statusColor.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(999),
+            ),
+            child: Text(
+              status,
+              style: TextStyle(
+                color: statusColor,
+                fontSize: 10,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 0.4,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

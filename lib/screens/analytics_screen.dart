@@ -10,6 +10,7 @@ import '../models/device_config_store.dart';
 import '../models/environmental_log_store.dart';
 import '../models/firebase_database_service.dart';
 import '../models/monitoring_store.dart';
+import '../models/temperature_settings_store.dart';
 import '../widgets/splash_background.dart';
 import '../widgets/user_avatar_content.dart';
 import 'profile_screen.dart';
@@ -35,17 +36,28 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
     super.initState();
     _batches = BatchStore.instance.batches.map((batch) => batch.name).toList();
     _selectedBatch = _batches.isEmpty ? 'Default Batch' : _batches.first;
+    TemperatureSettingsStore.instance.loadFor(_selectedBatch);
     _analyticsFuture = _loadAndRecordAnalytics();
+    EnvironmentalLogStore.instance.addListener(
+      _handleEnvironmentalLogRecorded,
+    );
     _analyticsRefreshTimer = Timer.periodic(
-      const Duration(minutes: 15),
+      const Duration(minutes: 1),
       (_) => _refreshLogs(),
     );
   }
 
   @override
   void dispose() {
+    EnvironmentalLogStore.instance.removeListener(
+      _handleEnvironmentalLogRecorded,
+    );
     _analyticsRefreshTimer?.cancel();
     super.dispose();
+  }
+
+  void _handleEnvironmentalLogRecorded() {
+    _refreshLogs();
   }
 
   void _refreshLogs() {
@@ -61,14 +73,17 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
     Navigator.of(context).pop();
   }
 
-  ({String label, Color color}) _temperatureIndicator(double temperature) {
+  ({String label, Color color}) _temperatureIndicator(
+    double temperature,
+    BatchTemperatureSettings settings,
+  ) {
     if (temperature == 0) {
       return (label: 'No Data', color: const Color(0xFF64748B));
     }
-    if (temperature < 28) {
+    if (temperature < settings.minTemperature) {
       return (label: 'Low', color: const Color(0xFF2563EB));
     }
-    if (temperature > 35) {
+    if (temperature > settings.maxTemperature) {
       return (label: 'High', color: const Color(0xFFE53935));
     }
     return (label: 'Normal', color: const Color(0xFF16A34A));
@@ -127,6 +142,9 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
     final batchLogs = _logsForSelectedBatch(logs);
     final fifteenMinuteLogs = _averageLogsByFifteenMinutes(batchLogs);
     final latestLog = batchLogs.isEmpty ? null : batchLogs.last;
+    final latestFifteenMinuteLog = fifteenMinuteLogs.isEmpty
+        ? null
+        : fifteenMinuteLogs.last;
     final temperatureValues = fifteenMinuteLogs
         .map((log) => log.temperature)
         .toList();
@@ -141,16 +159,16 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
         .where((value) => value > 0)
         .toList()
         .takeLast(16);
-    final displayedAverageTemperature = telemetry.isLive
+    final displayedAverageTemperature =
+        latestFifteenMinuteLog?.temperature ??
+        (telemetry.temperature > 0
         ? telemetry.temperature
-        : telemetry.temperature > 0
-        ? telemetry.temperature
-        : latestLog?.temperature ?? 0.0;
-    final displayedAverageHumidity = telemetry.isLive
+        : latestLog?.temperature ?? 0.0);
+    final displayedAverageHumidity =
+        latestFifteenMinuteLog?.humidity ??
+        (telemetry.humidity > 0
         ? telemetry.humidity
-        : telemetry.humidity > 0
-        ? telemetry.humidity
-        : latestLog?.humidity ?? 0.0;
+        : latestLog?.humidity ?? 0.0);
 
     final totalChickens = BatchStore.instance.totalBirdsFor(_selectedBatch);
     final mortalityCount = BatchStore.instance.mortalityCountFor(
@@ -177,12 +195,17 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
               latestLog!.waterLevelPercent > 0
         ? latestLog.waterLevelPercent
         : configuredWaterTankLevel;
-    final feederLevel = _readPercentValue(feederConfig, const [
+    final configuredFeederLevel = _readPercentValue(feederConfig, const [
       'feeder_level',
       'feed_level',
       'fill_level',
       'level_percent',
     ]);
+    final feederLevel = telemetry.isFeederLevelLive
+        ? telemetry.feederLevelPercent
+        : telemetry.feederDistanceCm > 0
+        ? telemetry.feederLevelPercent
+        : configuredFeederLevel;
 
     final waterDeviceCount = _readDeviceCount(waterConfig);
     final feederDeviceCount = _readDeviceCount(feederConfig);
@@ -326,7 +349,9 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
         humidity: double.parse(humidity.toStringAsFixed(0)),
         waterLevelPercent: latestLog.waterLevelPercent,
         waterDistanceCm: latestLog.waterDistanceCm,
-        recordedAt: entry.key.add(const Duration(minutes: 15)),
+        feederLevelPercent: latestLog.feederLevelPercent,
+        feederDistanceCm: latestLog.feederDistanceCm,
+        recordedAt: latestLog.recordedAt.toLocal(),
       );
     }).toList();
 
@@ -402,7 +427,10 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
               const SizedBox(height: 16),
               Expanded(
                 child: AnimatedBuilder(
-                  animation: MonitoringStore.instance,
+                  animation: Listenable.merge([
+                    MonitoringStore.instance,
+                    TemperatureSettingsStore.instance,
+                  ]),
                   builder: (context, _) {
                     return FutureBuilder<_AnalyticsData>(
                       future: _analyticsFuture,
@@ -423,17 +451,22 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                           _selectedBatch,
                         );
                         final logs = data.logs;
-                        final displayedTemperature = telemetry.isLive
-                            ? telemetry.temperature
-                            : data.averageTemperature;
-                        final displayedHumidity = telemetry.isLive
-                            ? telemetry.humidity
-                            : data.averageHumidity;
+                        final displayedTemperature = data.averageTemperature;
+                        final displayedHumidity = data.averageHumidity;
                         final displayedWaterLevel = telemetry.isWaterLevelLive
                             ? telemetry.waterLevelPercent
                             : data.waterTankLevel;
+                        final displayedFeederLevel =
+                            telemetry.isFeederLevelLive
+                            ? telemetry.feederLevelPercent
+                            : data.feederLevel;
+                        final temperatureSettings =
+                            TemperatureSettingsStore.instance.settingsFor(
+                              _selectedBatch,
+                            );
                         final temperatureIndicator = _temperatureIndicator(
                           displayedTemperature,
+                          temperatureSettings,
                         );
 
                         return RefreshIndicator(
@@ -497,12 +530,22 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                                       'Water sensor is offline. Showing the last recorded level.',
                                   icon: Icons.water_drop_outlined,
                                 ),
+                              if (!isLoading &&
+                                  !telemetry.isFeederLevelLive &&
+                                  displayedFeederLevel != null)
+                                const _StatusBanner(
+                                  text:
+                                      'Feeder sensor is offline. Showing the last recorded level.',
+                                  icon: Icons.restaurant_outlined,
+                                ),
                               if (snapshot.hasError ||
                                   isLoading ||
                                   logs.isEmpty ||
                                   !telemetry.isLive ||
                                   (!telemetry.isWaterLevelLive &&
-                                      displayedWaterLevel != null))
+                                      displayedWaterLevel != null) ||
+                                  (!telemetry.isFeederLevelLive &&
+                                      displayedFeederLevel != null))
                                 const SizedBox(height: 12),
                               GridView.count(
                                 crossAxisCount: 2,
@@ -563,14 +606,18 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                                   _MetricCard(
                                     icon: Icons.restaurant_outlined,
                                     iconColor: const Color(0xFFB45309),
-                                    trend: data.feederLevel != null
+                                    trend: telemetry.isFeederLevelLive
                                         ? 'Live sensor'
+                                        : displayedFeederLevel != null
+                                        ? 'Offline'
                                         : data.feederDeviceCount > 0
                                         ? 'Empty'
                                         : 'No sensor',
-                                    trendColor: const Color(0xFFB45309),
-                                    value: data.feederLevel != null
-                                        ? '${data.feederLevel!.toStringAsFixed(0)}%'
+                                    trendColor: telemetry.isFeederLevelLive
+                                        ? const Color(0xFFB45309)
+                                        : const Color(0xFF64748B),
+                                    value: displayedFeederLevel != null
+                                        ? '${displayedFeederLevel.toStringAsFixed(0)}%'
                                         : '0%',
                                     label: 'Feeder Level',
                                   ),
@@ -590,6 +637,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                                 child: _TemperatureChart(
                                   values: data.temperatureChartValues,
                                   labels: data.chartLabels,
+                                  settings: temperatureSettings,
                                 ),
                               ),
                               const SizedBox(height: 18),
@@ -723,6 +771,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
               .toList(),
           onChanged: (value) {
             if (value != null) {
+              TemperatureSettingsStore.instance.loadFor(value);
               setState(() {
                 _selectedBatch = value;
                 _analyticsFuture = _loadAndRecordAnalytics();
@@ -1341,8 +1390,13 @@ class _MetricCard extends StatelessWidget {
 class _TemperatureChart extends StatelessWidget {
   final List<double> values;
   final List<String> labels;
+  final BatchTemperatureSettings settings;
 
-  const _TemperatureChart({required this.values, required this.labels});
+  const _TemperatureChart({
+    required this.values,
+    required this.labels,
+    required this.settings,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1376,19 +1430,31 @@ class _TemperatureChart extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 10),
-            const Expanded(
+            Expanded(
               child: _InsightTile(
                 label: 'Target',
-                value: '28-35\u00B0C',
-                color: Color(0xFFB58F2A),
+                value:
+                    '${_formatTargetTemperature(settings.minTemperature)}-'
+                    '${_formatTargetTemperature(settings.maxTemperature)}\u00B0C',
+                color: const Color(0xFFB58F2A),
               ),
             ),
           ],
         ),
         const SizedBox(height: 18),
-        _TemperatureLineChart(values: chartValues, labels: labels),
+        _TemperatureLineChart(
+          values: chartValues,
+          labels: labels,
+          settings: settings,
+        ),
       ],
     );
+  }
+
+  String _formatTargetTemperature(double value) {
+    return value % 1 == 0
+        ? value.toStringAsFixed(0)
+        : value.toStringAsFixed(1);
   }
 }
 
@@ -1433,9 +1499,11 @@ class _HumidityTrendsPanel extends StatelessWidget {
             const SizedBox(width: 10),
             Expanded(
               child: _InsightTile(
-                label: 'Range',
+                label: 'Observed Range',
                 value: values.isEmpty
                     ? '--'
+                    : values.length == 1
+                    ? '${latestValue.toStringAsFixed(0)}%'
                     : '${minValue.toStringAsFixed(0)}-${maxValue.toStringAsFixed(0)}%',
                 color: const Color(0xFF8F7A3D),
               ),
@@ -1904,8 +1972,13 @@ class _DashedGuidePainter extends CustomPainter {
 class _TemperatureLineChart extends StatelessWidget {
   final List<double> values;
   final List<String> labels;
+  final BatchTemperatureSettings settings;
 
-  const _TemperatureLineChart({required this.values, required this.labels});
+  const _TemperatureLineChart({
+    required this.values,
+    required this.labels,
+    required this.settings,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1991,6 +2064,8 @@ class _TemperatureLineChart extends StatelessWidget {
                         child: CustomPaint(
                           painter: _TemperatureLinePainter(
                             values: sampledValues,
+                            minimumTarget: settings.minTemperature,
+                            maximumTarget: settings.maxTemperature,
                           ),
                           child: const SizedBox.expand(),
                         ),
@@ -2504,15 +2579,21 @@ class _MortalityReasonRow extends StatelessWidget {
 
 class _TemperatureLinePainter extends CustomPainter {
   final List<double> values;
+  final double minimumTarget;
+  final double maximumTarget;
 
-  const _TemperatureLinePainter({required this.values});
+  const _TemperatureLinePainter({
+    required this.values,
+    required this.minimumTarget,
+    required this.maximumTarget,
+  });
 
   @override
   void paint(Canvas canvas, Size size) {
     const chartGreenStart = Color(0xFF0B4F1D);
     const chartGreenEnd = Color(0xFF2E7D32);
     final minScale = 0.0;
-    final maxScale = 31.0;
+    final maxScale = 40.0;
     final leftPad = 2.0;
     final rightPad = 2.0;
     final topPad = 8.0;
@@ -2576,7 +2657,8 @@ class _TemperatureLinePainter extends CustomPainter {
       }
     }
 
-    drawDashedLine(yFor(28.5));
+    drawDashedLine(yFor(minimumTarget));
+    drawDashedLine(yFor(maximumTarget));
 
     Offset pointFor(int index, double value) {
       final denominator = values.length <= 1 ? 1 : values.length - 1;
@@ -2631,7 +2713,9 @@ class _TemperatureLinePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _TemperatureLinePainter oldDelegate) {
-    return oldDelegate.values != values;
+    return oldDelegate.values != values ||
+        oldDelegate.minimumTarget != minimumTarget ||
+        oldDelegate.maximumTarget != maximumTarget;
   }
 }
 

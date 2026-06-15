@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/auth_store.dart';
 import '../models/batch_store.dart';
@@ -8,8 +7,6 @@ import 'dashboards_screen.dart';
 import 'forgot_password_screen.dart';
 import 'signup_screen.dart';
 
-const String _rememberMeKey = 'remember_me';
-const String _rememberedEmailKey = 'remembered_email';
 const Color _authFieldColor = Color(0xFF757575);
 
 class LoginScreen extends StatefulWidget {
@@ -114,30 +111,25 @@ class _LoginScreenState extends State<LoginScreen>
   }
 
   Future<void> _restoreRememberedLogin() async {
-    final prefs = await SharedPreferences.getInstance();
-    final rememberMe = prefs.getBool(_rememberMeKey) ?? false;
-    final rememberedEmail = prefs.getString(_rememberedEmailKey) ?? '';
+    final remembered = await AuthStore.instance.loadRememberedLogin();
 
     if (!mounted) {
       return;
     }
 
     setState(() {
-      _rememberMe = rememberMe;
-      if (rememberedEmail.isNotEmpty) {
-        _emailController.text = rememberedEmail;
+      _rememberMe = remembered.enabled;
+      if (remembered.email.isNotEmpty) {
+        _emailController.text = remembered.email;
       }
     });
   }
 
   Future<void> _persistRememberedLogin(String email) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_rememberMeKey, _rememberMe);
-    if (_rememberMe) {
-      await prefs.setString(_rememberedEmailKey, email);
-    } else {
-      await prefs.remove(_rememberedEmailKey);
-    }
+    await AuthStore.instance.saveRememberedLogin(
+      enabled: _rememberMe,
+      email: email,
+    );
   }
 
   Future<void> _setRememberMe(bool value) async {

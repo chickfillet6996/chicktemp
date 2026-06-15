@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../models/auth_store.dart';
+import '../models/batch_store.dart';
 import 'login_screen.dart';
 
 class LogoutScreen {
@@ -60,8 +62,13 @@ class LogoutScreen {
                   const SizedBox(width: 12),
                   Expanded(
                     child: FilledButton(
-                      onPressed: () {
+                      onPressed: () async {
                         Navigator.of(dialogContext).pop();
+                        await AuthStore.instance.signOut();
+                        BatchStore.instance.clear();
+                        if (!context.mounted) {
+                          return;
+                        }
                         Navigator.of(
                           context,
                           rootNavigator: true,

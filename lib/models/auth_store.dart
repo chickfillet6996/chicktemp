@@ -68,6 +68,9 @@ class AuthStore {
   AuthStore._();
 
   static const String _cachedUsersKey = 'cached_auth_users';
+  static const String rememberMeKey = 'remember_me';
+  static const String rememberedEmailKey = 'remembered_email';
+  static const String _rememberedUserIdKey = 'remembered_user_id';
 
   static final AuthStore instance = AuthStore._();
 
@@ -76,6 +79,59 @@ class AuthStore {
   AppUser? currentUser;
 
   String get currentUserInitials => buildInitials(currentUser?.fullName);
+
+  Future<({bool enabled, String email})> loadRememberedLogin() async {
+    final prefs = await SharedPreferences.getInstance();
+    return (
+      enabled: prefs.getBool(rememberMeKey) ?? false,
+      email: prefs.getString(rememberedEmailKey) ?? '',
+    );
+  }
+
+  Future<void> saveRememberedLogin({
+    required bool enabled,
+    required String email,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(rememberMeKey, enabled);
+    if (enabled) {
+      await prefs.setString(rememberedEmailKey, email.trim().toLowerCase());
+      final userId = currentUser?.id;
+      if (userId != null && userId.isNotEmpty) {
+        await prefs.setString(_rememberedUserIdKey, userId);
+      }
+      return;
+    }
+
+    await prefs.remove(rememberedEmailKey);
+    await prefs.remove(_rememberedUserIdKey);
+  }
+
+  Future<bool> restoreRememberedSession() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!(prefs.getBool(rememberMeKey) ?? false)) {
+      return false;
+    }
+
+    final userId = prefs.getString(_rememberedUserIdKey);
+    if (userId == null || userId.isEmpty) {
+      return false;
+    }
+
+    final record = await _loadCachedUserRecord(userId);
+    if (record == null) {
+      return false;
+    }
+
+    currentUser = AppUser.fromJson(userId, record);
+    return true;
+  }
+
+  Future<void> signOut() async {
+    currentUser = null;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_rememberedUserIdKey);
+  }
 
   Future<AuthResult> signUp({
     required String fullName,
