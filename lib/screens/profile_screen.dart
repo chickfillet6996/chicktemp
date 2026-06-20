@@ -9,69 +9,27 @@ import 'editprofile_screen.dart';
 import 'helpcenter_screen.dart';
 import 'logout_screen.dart';
 import 'poilicies_screen.dart';
+import '../widgets/settings_back_card.dart';
 import '../widgets/settings_overlay_sheet.dart';
 import '../widgets/user_avatar_content.dart';
 
 class ProfileScreen extends StatelessWidget {
-  final String displayName;
-  final String email;
-  final String phone;
-  final String profilePhotoBase64;
+  const ProfileScreen({super.key});
 
-  const ProfileScreen({
-    super.key,
-    this.displayName = 'Farm Manager',
-    this.email = 'manager@chicktemp.app',
-    this.phone = '+1 234 567 8900',
-    this.profilePhotoBase64 = '',
-  });
-
-  static Future<void> show(
-    BuildContext context, {
-    String? displayName,
-    String? email,
-    String? phone,
-  }) {
-    final user = AuthStore.instance.currentUser;
+  static Future<void> show(BuildContext context) {
     return Navigator.of(context).push<void>(
       MaterialPageRoute(
-        builder: (_) => ProfileScreen(
-          displayName: displayName ?? user?.fullName ?? 'Farm Manager',
-          email: email ?? user?.emailAddress ?? 'manager@chicktemp.app',
-          phone:
-              phone ??
-              (user?.phoneNumber.isNotEmpty == true
-                  ? user!.phoneNumber
-                  : 'No phone number'),
-          profilePhotoBase64: user?.profilePhotoBase64 ?? '',
-        ),
+        builder: (_) => const ProfileScreen(),
       ),
     );
   }
 
   @override
-  Widget build(BuildContext context) {
-    return _ProfileSheetBody(
-      initialDisplayName: displayName,
-      initialEmail: email,
-      initialPhone: phone,
-      initialProfilePhotoBase64: profilePhotoBase64,
-    );
-  }
+  Widget build(BuildContext context) => const _ProfileSheetBody();
 }
 
 class _ProfileSheetBody extends StatefulWidget {
-  final String initialDisplayName;
-  final String initialEmail;
-  final String initialPhone;
-  final String initialProfilePhotoBase64;
-
-  const _ProfileSheetBody({
-    required this.initialDisplayName,
-    required this.initialEmail,
-    required this.initialPhone,
-    required this.initialProfilePhotoBase64,
-  });
+  const _ProfileSheetBody();
 
   @override
   State<_ProfileSheetBody> createState() => _ProfileSheetBodyState();
@@ -80,35 +38,12 @@ class _ProfileSheetBody extends StatefulWidget {
 class _ProfileSheetBodyState extends State<_ProfileSheetBody> {
   @override
   Widget build(BuildContext context) {
-    final user = AuthStore.instance.currentUser;
-    final displayName = user?.fullName.isNotEmpty == true
-        ? user!.fullName
-        : widget.initialDisplayName;
-    final email = user?.emailAddress.isNotEmpty == true
-        ? user!.emailAddress
-        : widget.initialEmail;
-    final phone = user?.phoneNumber.isNotEmpty == true
-        ? user!.phoneNumber
-        : widget.initialPhone;
-    final profilePhotoBase64 = user?.profilePhotoBase64.isNotEmpty == true
-        ? user!.profilePhotoBase64
-        : widget.initialProfilePhotoBase64;
-    final initials = AuthStore.buildInitials(displayName);
-
     return SettingsOverlaySheet(
       headerBand: const _HeaderBand(),
       backgroundPainter: const _EmptyBackgroundPainter(),
       child: ListView(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
         children: [
-          _ProfileIdentityCard(
-            displayName: displayName,
-            email: email,
-            phone: phone,
-            initials: initials,
-            profilePhotoBase64: profilePhotoBase64,
-          ),
-          const SizedBox(height: 18),
           _BackRow(onBack: () => Navigator.of(context).pop()),
           const SizedBox(height: 14),
           const _SectionTitle('ACCOUNT PREFERENCES'),
@@ -195,155 +130,7 @@ class _BackRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [
-        InkWell(
-          onTap: onBack,
-          borderRadius: BorderRadius.circular(16),
-          child: const Padding(
-            padding: EdgeInsets.symmetric(vertical: 6),
-            child: Row(
-              children: [
-                Icon(
-                  Icons.arrow_back_rounded,
-                  color: Color(0xFF41536D),
-                  size: 20,
-                ),
-                SizedBox(width: 6),
-                Text(
-                  'Back',
-                  style: TextStyle(
-                    color: Color(0xFF41536D),
-                    fontSize: 14,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _ProfileIdentityCard extends StatelessWidget {
-  final String displayName;
-  final String email;
-  final String phone;
-  final String initials;
-  final String profilePhotoBase64;
-
-  const _ProfileIdentityCard({
-    required this.displayName,
-    required this.email,
-    required this.phone,
-    required this.initials,
-    required this.profilePhotoBase64,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: const Color(0xFFE3E9E4)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.04),
-            blurRadius: 12,
-            offset: const Offset(0, 5),
-          ),
-        ],
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          Container(
-            width: 50,
-            height: 50,
-            decoration: const BoxDecoration(
-              color: Color(0xFF1FA34A),
-              shape: BoxShape.circle,
-            ),
-            alignment: Alignment.center,
-            child: ClipOval(
-              child: SizedBox(
-                width: 50,
-                height: 50,
-                child: UserAvatarContent(
-                  initials: initials,
-                  profilePhotoBase64: profilePhotoBase64,
-                  textStyle: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 20,
-                    fontWeight: FontWeight.w800,
-                  ),
-                  borderRadius: 999,
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const Text(
-                  'ACCOUNT',
-                  style: TextStyle(
-                    color: Color(0xFF7A8797),
-                    fontSize: 10,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: 0.4,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  displayName,
-                  style: const TextStyle(
-                    color: Color(0xFF172033),
-                    fontSize: 18,
-                    fontWeight: FontWeight.w800,
-                    height: 1.1,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                const SizedBox(height: 3),
-                Text(
-                  email,
-                  style: const TextStyle(
-                    color: Color(0xFF64748B),
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                    height: 1.2,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  phone,
-                  style: const TextStyle(
-                    color: Color(0xFF8A94A6),
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500,
-                    height: 1.2,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
+    return SettingsBackCard(onTap: onBack);
   }
 }
 
@@ -365,97 +152,177 @@ class _MenuList extends StatelessWidget {
   }
 }
 
-class _MenuRow extends StatelessWidget {
+class _MenuRow extends StatefulWidget {
   final _MenuItemData item;
 
   const _MenuRow({required this.item});
 
   @override
+  State<_MenuRow> createState() => _MenuRowState();
+}
+
+class _MenuRowState extends State<_MenuRow> {
+  bool _isHighlighted = false;
+
+  void _setHighlighted(bool value) {
+    if (_isHighlighted == value) {
+      return;
+    }
+    setState(() => _isHighlighted = value);
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return InkWell(
-      onTap: item.onTap,
-      borderRadius: BorderRadius.circular(18),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 4),
-        child: Row(
-          children: [
-            Container(
-              width: 36,
-              height: 36,
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(12),
-                boxShadow: [
-                  BoxShadow(
-                    color: const Color(0xFF12B157).withOpacity(0.10),
-                    blurRadius: 16,
-                    offset: const Offset(0, 8),
-                  ),
-                ],
-              ),
-              alignment: Alignment.center,
-              child: Icon(item.icon, size: 18, color: const Color(0xFF08B04F)),
+    final foreground = _isHighlighted
+        ? const Color(0xFF0B8F3D)
+        : const Color(0xFF3F4D63);
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: widget.item.onTap,
+        onHover: _setHighlighted,
+        onHighlightChanged: _setHighlighted,
+        borderRadius: BorderRadius.circular(18),
+        splashColor: const Color(0xFF0BB13F).withOpacity(0.14),
+        highlightColor: const Color(0xFF0BB13F).withOpacity(0.10),
+        hoverColor: const Color(0xFF0BB13F).withOpacity(0.08),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 140),
+          curve: Curves.easeOut,
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+          decoration: BoxDecoration(
+            color: _isHighlighted
+                ? const Color(0xFFEAFBF0)
+                : Colors.white.withOpacity(0.36),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(
+              color: _isHighlighted
+                  ? const Color(0xFF9FE4B2)
+                  : Colors.white.withOpacity(0.34),
             ),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Text(
-                item.label,
-                style: const TextStyle(
-                  color: Color(0xFF3F4D63),
-                  fontSize: 14,
-                  fontWeight: FontWeight.w700,
+          ),
+          child: Row(
+            children: [
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 140),
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: _isHighlighted
+                      ? const Color(0xFFDDF8E5)
+                      : Colors.white,
+                  borderRadius: BorderRadius.circular(12),
+                  boxShadow: [
+                    BoxShadow(
+                      color: const Color(0xFF12B157).withOpacity(
+                        _isHighlighted ? 0.18 : 0.10,
+                      ),
+                      blurRadius: 16,
+                      offset: const Offset(0, 8),
+                    ),
+                  ],
+                ),
+                alignment: Alignment.center,
+                child: Icon(
+                  widget.item.icon,
+                  size: 18,
+                  color: const Color(0xFF08B04F),
                 ),
               ),
-            ),
-            const Icon(
-              Icons.chevron_right_rounded,
-              color: Color(0xFFCAD1DC),
-              size: 20,
-            ),
-          ],
+              const SizedBox(width: 14),
+              Expanded(
+                child: Text(
+                  widget.item.label,
+                  style: TextStyle(
+                    color: foreground,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+              Icon(
+                Icons.chevron_right_rounded,
+                color: _isHighlighted
+                    ? const Color(0xFF0B8F3D)
+                    : const Color(0xFFCAD1DC),
+                size: 20,
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
 }
 
-class _LogoutButton extends StatelessWidget {
+class _LogoutButton extends StatefulWidget {
   final VoidCallback onTap;
 
   const _LogoutButton({required this.onTap});
 
   @override
+  State<_LogoutButton> createState() => _LogoutButtonState();
+}
+
+class _LogoutButtonState extends State<_LogoutButton> {
+  bool _isHighlighted = false;
+
+  void _setHighlighted(bool value) {
+    if (_isHighlighted == value) {
+      return;
+    }
+    setState(() => _isHighlighted = value);
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(18),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-        decoration: BoxDecoration(
-          color: Colors.white.withOpacity(0.74),
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: const Color(0xFFE7ECE5)),
-        ),
-        child: Row(
-          children: const [
-            Icon(Icons.logout_rounded, color: Color(0xFFDB5A5A), size: 20),
-            SizedBox(width: 12),
-            Expanded(
-              child: Text(
-                'Log Out',
-                style: TextStyle(
-                  color: Color(0xFFB74848),
-                  fontSize: 14,
-                  fontWeight: FontWeight.w800,
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: widget.onTap,
+        onHover: _setHighlighted,
+        onHighlightChanged: _setHighlighted,
+        borderRadius: BorderRadius.circular(18),
+        splashColor: const Color(0xFFDB5A5A).withOpacity(0.14),
+        highlightColor: const Color(0xFFDB5A5A).withOpacity(0.10),
+        hoverColor: const Color(0xFFDB5A5A).withOpacity(0.08),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 140),
+          curve: Curves.easeOut,
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+          decoration: BoxDecoration(
+            color: _isHighlighted
+                ? const Color(0xFFFFF1F1)
+                : Colors.white.withOpacity(0.74),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(
+              color: _isHighlighted
+                  ? const Color(0xFFFFCBCB)
+                  : const Color(0xFFE7ECE5),
+            ),
+          ),
+          child: Row(
+            children: const [
+              Icon(Icons.logout_rounded, color: Color(0xFFDB5A5A), size: 20),
+              SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  'Log Out',
+                  style: TextStyle(
+                    color: Color(0xFFB74848),
+                    fontSize: 14,
+                    fontWeight: FontWeight.w800,
+                  ),
                 ),
               ),
-            ),
-            Icon(
-              Icons.chevron_right_rounded,
-              color: Color(0xFFE1B3B3),
-              size: 20,
-            ),
-          ],
+              Icon(
+                Icons.chevron_right_rounded,
+                color: Color(0xFFE1B3B3),
+                size: 20,
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -500,7 +367,7 @@ class _HeaderBand extends StatelessWidget {
           borderRadius: BorderRadius.circular(28),
         ),
         child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
             const Expanded(
               child: Column(

@@ -78,6 +78,7 @@ class WaterSupplyDropdownCard extends StatelessWidget {
   final double waterLevelPercent;
   final double waterDistanceCm;
   final bool waterLevelLive;
+  final bool hideDefaultsWhenEmpty;
 
   const WaterSupplyDropdownCard({
     super.key,
@@ -96,11 +97,13 @@ class WaterSupplyDropdownCard extends StatelessWidget {
     required this.waterLevelPercent,
     required this.waterDistanceCm,
     required this.waterLevelLive,
+    this.hideDefaultsWhenEmpty = false,
   });
 
   @override
   Widget build(BuildContext context) {
     final hasDevice = devices.isNotEmpty;
+    final showDefaultComponents = hasDevice || !hideDefaultsWhenEmpty;
     final headerColor = hasDevice ? const Color(0xFFE6F0FF) : const Color(0xFFEAF2FF);
     final subtitle =
         hasDevice ? '${devices.length} Device${devices.length == 1 ? '' : 's'} Connected' : 'No Devices';
@@ -115,6 +118,9 @@ class WaterSupplyDropdownCard extends StatelessWidget {
           InkWell(
             onTap: onTapHeader,
             borderRadius: BorderRadius.circular(24),
+            splashFactory: NoSplash.splashFactory,
+            splashColor: Colors.transparent,
+            highlightColor: Colors.transparent,
             child: Padding(
               padding: const EdgeInsets.all(16),
               child: Row(
@@ -177,52 +183,59 @@ class WaterSupplyDropdownCard extends StatelessWidget {
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
               child: Column(
                 children: [
-                  _WaterLevelCard(
-                    levelPercent: waterLevelPercent,
-                    distanceCm: waterDistanceCm,
-                    isLive: waterLevelLive,
-                  ),
-                  const SizedBox(height: 12),
-                  _WaterControlCard(
-                    enabled: masterEnabled,
-                    onChanged: onToggleMaster,
-                  ),
-                  const SizedBox(height: 12),
-                  _WaterScheduleCard(
-                    title: 'MANAGE SCHEDULE',
-                    buttonLabel: '+ Add Schedule',
-                    schedules: globalSchedules,
-                    emptyText: 'No global schedule set',
-                    onAddSchedule: onAddGlobalSchedule,
-                  ),
-                  const SizedBox(height: 12),
-                  if (hasDevice)
-                    ...List.generate(devices.length, (index) {
-                      final device = devices[index];
-                      final schedules = deviceSchedules[device.id] ?? const <String>[];
-                      return Padding(
-                        padding: EdgeInsets.only(bottom: index == devices.length - 1 ? 0 : 12),
-                        child: Column(
-                          children: [
-                            _WaterDeviceCard(
-                              device: device,
-                              onDelete: () => onDeleteDevice(index),
-                              onChanged: (value) => onToggleDevice(index, value),
-                            ),
-                            const SizedBox(height: 12),
-                            _WaterScheduleCard(
-                              title: 'WATER SCHEDULE',
-                              buttonLabel: '+ Add Schedule',
-                              schedules: schedules,
-                              emptyText: 'No water schedule set for this device',
-                              onAddSchedule: () => onAddDeviceSchedule(index),
-                            ),
-                          ],
-                        ),
-                      );
-                    })
+                  if (showDefaultComponents)
+                    ...[
+                      _WaterLevelCard(
+                        levelPercent: waterLevelPercent,
+                        distanceCm: waterDistanceCm,
+                        isLive: waterLevelLive,
+                      ),
+                      const SizedBox(height: 12),
+                      _WaterControlCard(
+                        enabled: masterEnabled,
+                        onChanged: onToggleMaster,
+                      ),
+                      const SizedBox(height: 12),
+                      _WaterScheduleCard(
+                        title: 'MANAGE SCHEDULE',
+                        buttonLabel: '+ Add Schedule',
+                        schedules: globalSchedules,
+                        emptyText: 'No global schedule set',
+                        onAddSchedule: onAddGlobalSchedule,
+                      ),
+                      const SizedBox(height: 12),
+                      if (hasDevice)
+                        ...List.generate(devices.length, (index) {
+                        final device = devices[index];
+                        final schedules =
+                            deviceSchedules[device.id] ?? const <String>[];
+                        return Padding(
+                          padding: EdgeInsets.only(
+                            bottom: index == devices.length - 1 ? 0 : 12,
+                          ),
+                          child: Column(
+                            children: [
+                              _WaterDeviceCard(
+                                device: device,
+                                onDelete: () => onDeleteDevice(index),
+                                onChanged: (value) =>
+                                    onToggleDevice(index, value),
+                              ),
+                              const SizedBox(height: 12),
+                              _WaterScheduleCard(
+                                title: 'WATER SCHEDULE',
+                                buttonLabel: '+ Add Schedule',
+                                schedules: schedules,
+                                emptyText:
+                                    'No water schedule set for this device',
+                                onAddSchedule: () => onAddDeviceSchedule(index),
+                              ),
+                            ],
+                          ),
+                        );
+                      }),
+                    ]
                   else ...[
-                    const SizedBox(height: 12),
                     const _EmptyWaterPlaceholder(),
                   ],
                   const SizedBox(height: 12),

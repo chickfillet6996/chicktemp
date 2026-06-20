@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../models/auth_store.dart';
+import '../widgets/settings_back_card.dart';
 import '../widgets/settings_overlay_sheet.dart';
 import '../widgets/user_avatar_content.dart';
 
@@ -32,7 +33,7 @@ class PoliciesScreen extends StatelessWidget {
           'Control Feeder, Ventilation, Lighting, and Water Supply via the app.',
           'Use the app to manage device operations and schedules.',
         ],
-        numbered: true,
+        numbered: false,
       ),
       (
         title: 'Poultry Management Guidelines',
@@ -63,16 +64,7 @@ class PoliciesScreen extends StatelessWidget {
         padding: const EdgeInsets.fromLTRB(22, 18, 22, 22),
         children: [
           _TopBar(onBack: () => Navigator.of(context).pop()),
-          const Divider(height: 30, color: Color(0xFFE7EBE6)),
-          const Text(
-            'Policies and Procedures',
-            style: TextStyle(
-              color: Color(0xFF1E293B),
-              fontSize: 18,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-          const SizedBox(height: 18),
+          const SizedBox(height: 30),
           ...sections.map(
             (section) => Padding(
               padding: const EdgeInsets.only(bottom: 16),
@@ -96,35 +88,7 @@ class _TopBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [
-        InkWell(
-          onTap: onBack,
-          borderRadius: BorderRadius.circular(16),
-          child: const Padding(
-            padding: EdgeInsets.symmetric(vertical: 6),
-            child: Row(
-              children: [
-                Icon(
-                  Icons.arrow_back_rounded,
-                  color: Color(0xFF41536D),
-                  size: 20,
-                ),
-                SizedBox(width: 6),
-                Text(
-                  'Back',
-                  style: TextStyle(
-                    color: Color(0xFF41536D),
-                    fontSize: 14,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ],
-    );
+    return SettingsBackCard(onTap: onBack);
   }
 }
 
@@ -242,7 +206,7 @@ class _HeaderBand extends StatelessWidget {
           borderRadius: BorderRadius.circular(28),
         ),
         child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
             const Expanded(
               child: Column(
@@ -264,13 +228,20 @@ class _HeaderBand extends StatelessWidget {
                     ],
                   ),
                   SizedBox(height: 10),
-                  Text(
-                    'Policies',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 28,
-                      fontWeight: FontWeight.w800,
-                      height: 1.0,
+                  SizedBox(
+                    width: double.infinity,
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        'Policies & Procedure',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 28,
+                          fontWeight: FontWeight.w800,
+                          height: 1.0,
+                        ),
+                      ),
                     ),
                   ),
                   SizedBox(height: 6),

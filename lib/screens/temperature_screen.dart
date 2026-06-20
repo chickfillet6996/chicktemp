@@ -76,7 +76,7 @@ class _TemperatureScreenState extends State<TemperatureScreen> {
                     borderRadius: BorderRadius.circular(28),
                   ),
                   child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                    crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
                       const Expanded(
                         child: Column(
@@ -218,7 +218,11 @@ class _TemperatureScreenState extends State<TemperatureScreen> {
                 selected: _selectedNavIndex == 1,
                 onTap: () {
                   Navigator.of(context).pushReplacement(
-                    MaterialPageRoute(builder: (_) => const AnalyticsScreen()),
+                    MaterialPageRoute(
+                      builder: (_) => AnalyticsScreen(
+                        initialBatchName: widget.batchName,
+                      ),
+                    ),
                   );
                 },
               ),
@@ -228,7 +232,11 @@ class _TemperatureScreenState extends State<TemperatureScreen> {
                 selected: _selectedNavIndex == 2,
                 onTap: () {
                   Navigator.of(context).pushReplacement(
-                    MaterialPageRoute(builder: (_) => const ReportsScreen()),
+                    MaterialPageRoute(
+                      builder: (_) => ReportsScreen(
+                        initialBatchName: widget.batchName,
+                      ),
+                    ),
                   );
                 },
               ),

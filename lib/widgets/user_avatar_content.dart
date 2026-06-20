@@ -62,6 +62,7 @@ class _UserAvatarContentState extends State<UserAvatarContent> {
         child: Image(
           image: _imageProvider!,
           fit: BoxFit.cover,
+          alignment: const Alignment(0, 0.35),
           gaplessPlayback: true,
           filterQuality: FilterQuality.medium,
         ),

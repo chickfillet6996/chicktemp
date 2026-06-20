@@ -76,8 +76,8 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen>
       _showMessage('Enter your email address.');
       return;
     }
-    if (!email.contains('@')) {
-      _showMessage('Enter a valid email address.');
+    if (!AuthStore.isValidGmailAddress(email)) {
+      _showMessage(AuthStore.gmailAddressMessage);
       return;
     }
     if (newPassword.length < 6) {
@@ -357,6 +357,14 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen>
                                     prefixIcon: Icons.lock_outline_rounded,
                                     obscureText: _obscureNewPassword,
                                     suffixIcon: IconButton(
+                                      style: IconButton.styleFrom(
+                                        hoverColor: const Color(
+                                          0xFF02AC3F,
+                                        ).withOpacity(0.08),
+                                        highlightColor: const Color(
+                                          0xFF02AC3F,
+                                        ).withOpacity(0.12),
+                                      ),
                                       onPressed: () {
                                         setState(() {
                                           _obscureNewPassword =
@@ -382,6 +390,14 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen>
                                     prefixIcon: Icons.lock_outline_rounded,
                                     obscureText: _obscureConfirmPassword,
                                     suffixIcon: IconButton(
+                                      style: IconButton.styleFrom(
+                                        hoverColor: const Color(
+                                          0xFF02AC3F,
+                                        ).withOpacity(0.08),
+                                        highlightColor: const Color(
+                                          0xFF02AC3F,
+                                        ).withOpacity(0.12),
+                                      ),
                                       onPressed: () {
                                         setState(() {
                                           _obscureConfirmPassword =
@@ -433,6 +449,8 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen>
                                           backgroundColor: Colors.transparent,
                                           shadowColor: Colors.transparent,
                                           foregroundColor: Colors.white,
+                                          overlayColor: Colors.white
+                                              .withOpacity(0.14),
                                           elevation: 0,
                                           shape: RoundedRectangleBorder(
                                             borderRadius:
@@ -487,14 +505,33 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen>
                                 color: Color(0xFF757575),
                               ),
                             ),
-                            GestureDetector(
-                              onTap: () => Navigator.of(context).pop(),
-                              child: const Text(
-                                'Sign in',
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  color: Color(0xFF02AC3F),
-                                  fontWeight: FontWeight.w700,
+                            Material(
+                              color: Colors.transparent,
+                              child: InkWell(
+                                onTap: () => Navigator.of(context).pop(),
+                                borderRadius: BorderRadius.circular(10),
+                                splashColor: const Color(
+                                  0xFF02AC3F,
+                                ).withOpacity(0.14),
+                                highlightColor: const Color(
+                                  0xFF02AC3F,
+                                ).withOpacity(0.10),
+                                hoverColor: const Color(
+                                  0xFF02AC3F,
+                                ).withOpacity(0.08),
+                                child: const Padding(
+                                  padding: EdgeInsets.symmetric(
+                                    horizontal: 6,
+                                    vertical: 4,
+                                  ),
+                                  child: Text(
+                                    'Sign in',
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      color: Color(0xFF02AC3F),
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
                                 ),
                               ),
                             ),

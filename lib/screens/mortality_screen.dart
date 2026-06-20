@@ -227,21 +227,21 @@ class _MortalityScreenState extends State<MortalityScreen> {
       body: SplashBackground(
         child: SafeArea(
           child: ListView(
-            padding: const EdgeInsets.fromLTRB(20, 14, 20, 24),
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
             children: [
                 Container(
                   width: double.infinity,
-                  padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
+                  padding: const EdgeInsets.fromLTRB(18, 18, 18, 20),
                   decoration: BoxDecoration(
                     gradient: const LinearGradient(
-                      colors: [Color(0xFF2E7D32), Color(0xFF4CAF50)],
+                      colors: [Color(0xFF1F6F2F), Color(0xFF47A34A)],
                       begin: Alignment.topLeft,
                       end: Alignment.bottomRight,
                     ),
                     borderRadius: BorderRadius.circular(28),
                   ),
                   child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                    crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
                       const Expanded(
                         child: Column(
@@ -287,6 +287,9 @@ class _MortalityScreenState extends State<MortalityScreen> {
                       InkWell(
                         onTap: () => ProfileScreen.show(context),
                         borderRadius: BorderRadius.circular(14),
+                        splashColor: Colors.white.withOpacity(0.18),
+                        highlightColor: Colors.white.withOpacity(0.12),
+                        hoverColor: Colors.white.withOpacity(0.08),
                         child: Container(
                           width: 46,
                           height: 46,
@@ -316,25 +319,34 @@ class _MortalityScreenState extends State<MortalityScreen> {
                 const SizedBox(height: 18),
                 Row(
                   children: [
-                    InkWell(
-                      onTap: () => Navigator.of(context).pop(),
-                      borderRadius: BorderRadius.circular(16),
-                      child: Container(
-                        width: 42,
-                        height: 42,
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(16),
-                          border: Border.all(color: const Color(0xFFE3E9E4)),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withOpacity(0.05),
-                              blurRadius: 14,
-                              offset: const Offset(0, 6),
-                            ),
-                          ],
+                    Material(
+                      color: Colors.transparent,
+                      child: InkWell(
+                        onTap: () => Navigator.of(context).pop(),
+                        borderRadius: BorderRadius.circular(16),
+                        splashColor: const Color(0xFF0BB13F).withOpacity(0.14),
+                        highlightColor: const Color(0xFF0BB13F).withOpacity(0.10),
+                        hoverColor: const Color(0xFF0BB13F).withOpacity(0.08),
+                        child: Ink(
+                          width: 42,
+                          height: 42,
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(color: const Color(0xFFE3E9E4)),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withOpacity(0.05),
+                                blurRadius: 14,
+                                offset: const Offset(0, 6),
+                              ),
+                            ],
+                          ),
+                          child: const Icon(
+                            Icons.arrow_back_rounded,
+                            color: Color(0xFF1F2937),
+                          ),
                         ),
-                        child: const Icon(Icons.arrow_back_rounded, color: Color(0xFF1F2937)),
                       ),
                     ),
                     const SizedBox(width: 10),
@@ -347,7 +359,7 @@ class _MortalityScreenState extends State<MortalityScreen> {
                             style: const TextStyle(
                               fontSize: 20,
                               fontWeight: FontWeight.w800,
-                              color: Color(0xFF1F2937),
+                              color: Color(0xFF172033),
                             ),
                           ),
                           const SizedBox(height: 4),
@@ -356,7 +368,7 @@ class _MortalityScreenState extends State<MortalityScreen> {
                             style: TextStyle(
                               fontSize: 12,
                               fontWeight: FontWeight.w700,
-                              color: const Color(0xFF5E6B7E).withOpacity(0.95),
+                              color: const Color(0xFF58705A).withOpacity(0.95),
                               letterSpacing: 0.4,
                             ),
                           ),
@@ -373,8 +385,8 @@ class _MortalityScreenState extends State<MortalityScreen> {
                         value: _initialBirdCount.toString(),
                         label: 'TOTAL',
                         foreground: Color(0xFF233047),
-                        background: Color(0xFFF8FAFD),
-                        border: Color(0xFFE6ECF2),
+                        background: Color(0xFFFFFFFF),
+                        border: Color(0xFFE3E9E4),
                       ),
                     ),
                     SizedBox(width: 10),
@@ -382,9 +394,9 @@ class _MortalityScreenState extends State<MortalityScreen> {
                       child: _StatusCard(
                         value: _aliveBirds.toString(),
                         label: 'ALIVE',
-                        foreground: Color(0xFF16A34A),
-                        background: Color(0xFFEFFAF1),
-                        border: Color(0xFFCAE8D0),
+                        foreground: Color(0xFF2E7D32),
+                        background: Color(0xFFF4FBF6),
+                        border: Color(0xFFDCEBDD),
                       ),
                     ),
                     SizedBox(width: 10),
@@ -392,9 +404,9 @@ class _MortalityScreenState extends State<MortalityScreen> {
                       child: _StatusCard(
                         value: _totalDeaths.toString(),
                         label: 'DEAD',
-                        foreground: Color(0xFFE53935),
-                        background: Color(0xFFFFF0F0),
-                        border: Color(0xFFF2CACA),
+                        foreground: Color(0xFF9C6B35),
+                        background: Color(0xFFF6FAF7),
+                        border: Color(0xFFDCE9DD),
                       ),
                     ),
                     SizedBox(width: 10),
@@ -402,9 +414,9 @@ class _MortalityScreenState extends State<MortalityScreen> {
                       child: _StatusCard(
                         value: '${_lossPercent.toStringAsFixed(1)}%',
                         label: 'LOSS %',
-                        foreground: Color(0xFFFF6A00),
-                        background: Color(0xFFFFF5E9),
-                        border: Color(0xFFF3D3AA),
+                        foreground: Color(0xFF8F7A3D),
+                        background: Color(0xFFF6FAF7),
+                        border: Color(0xFFDCE9DD),
                       ),
                     ),
                   ],
@@ -414,7 +426,7 @@ class _MortalityScreenState extends State<MortalityScreen> {
                   padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
                     color: Colors.white,
-                    borderRadius: BorderRadius.circular(20),
+                    borderRadius: BorderRadius.circular(18),
                     border: Border.all(color: const Color(0xFFE3E9E4)),
                     boxShadow: [
                       BoxShadow(
@@ -433,10 +445,10 @@ class _MortalityScreenState extends State<MortalityScreen> {
                             width: 28,
                             height: 28,
                             decoration: BoxDecoration(
-                              color: const Color(0xFFFFEEF0),
+                              color: const Color(0xFFF4FBF6),
                               borderRadius: BorderRadius.circular(10),
                             ),
-                            child: const Icon(Icons.sick_outlined, size: 16, color: Color(0xFFFF6B6B)),
+                            child: const Icon(Icons.sick_outlined, size: 16, color: Color(0xFF2E7D32)),
                           ),
                           const SizedBox(width: 10),
                           const Expanded(
@@ -445,7 +457,7 @@ class _MortalityScreenState extends State<MortalityScreen> {
                               style: TextStyle(
                                 fontSize: 12,
                                 fontWeight: FontWeight.w800,
-                                color: Color(0xFF1F2937),
+                                color: Color(0xFF58705A),
                                 letterSpacing: 0.4,
                               ),
                             ),
@@ -495,7 +507,7 @@ class _MortalityScreenState extends State<MortalityScreen> {
                           child: FilledButton.icon(
                           onPressed: _addMortalityRecord,
                           style: FilledButton.styleFrom(
-                            backgroundColor: const Color(0xFFE04B5A),
+                            backgroundColor: const Color(0xFF2E7D32),
                             foregroundColor: Colors.white,
                             elevation: 0,
                             shape: RoundedRectangleBorder(
@@ -517,7 +529,7 @@ class _MortalityScreenState extends State<MortalityScreen> {
                   padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
                     color: Colors.white,
-                    borderRadius: BorderRadius.circular(20),
+                    borderRadius: BorderRadius.circular(18),
                     border: Border.all(color: const Color(0xFFE3E9E4)),
                     boxShadow: [
                       BoxShadow(
@@ -538,7 +550,7 @@ class _MortalityScreenState extends State<MortalityScreen> {
                               style: TextStyle(
                                 fontSize: 12,
                                 fontWeight: FontWeight.w800,
-                                color: Color(0xFF1F2937),
+                                color: Color(0xFF58705A),
                                 letterSpacing: 0.4,
                               ),
                             ),
@@ -555,16 +567,16 @@ class _MortalityScreenState extends State<MortalityScreen> {
                           Container(
                             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                             decoration: BoxDecoration(
-                              color: const Color(0xFFFFF0F0),
+                              color: const Color(0xFFF4FBF6),
                               borderRadius: BorderRadius.circular(999),
-                              border: Border.all(color: const Color(0xFFF4C6C6)),
+                              border: Border.all(color: const Color(0xFFDCEBDD)),
                             ),
                             child: Text(
                               'Total: $_totalDeaths',
                               style: TextStyle(
                                 fontSize: 10,
                                 fontWeight: FontWeight.w800,
-                                color: Color(0xFFE53935),
+                                color: Color(0xFF2E7D32),
                               ),
                             ),
                           ),
@@ -635,7 +647,11 @@ class _MortalityScreenState extends State<MortalityScreen> {
                 selected: _selectedNavIndex == 1,
                 onTap: () {
                   Navigator.of(context).pushReplacement(
-                    MaterialPageRoute(builder: (_) => const AnalyticsScreen()),
+                    MaterialPageRoute(
+                      builder: (_) => AnalyticsScreen(
+                        initialBatchName: widget.batchName,
+                      ),
+                    ),
                   );
                 },
               ),
@@ -645,7 +661,11 @@ class _MortalityScreenState extends State<MortalityScreen> {
                 selected: _selectedNavIndex == 2,
                 onTap: () {
                   Navigator.of(context).pushReplacement(
-                    MaterialPageRoute(builder: (_) => const ReportsScreen()),
+                    MaterialPageRoute(
+                      builder: (_) => ReportsScreen(
+                        initialBatchName: widget.batchName,
+                      ),
+                    ),
                   );
                 },
               ),
@@ -780,20 +800,20 @@ class _InputField extends StatelessWidget {
               fontWeight: FontWeight.w600,
             ),
             filled: true,
-            fillColor: const Color(0xFFF8FAFD),
+            fillColor: const Color(0xFFF6FAF7),
             contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
             suffixIcon: suffixIcon,
             border: OutlineInputBorder(
               borderRadius: BorderRadius.circular(14),
-              borderSide: const BorderSide(color: Color(0xFFE0E6EE)),
+              borderSide: const BorderSide(color: Color(0xFFDCE9DD)),
             ),
             enabledBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(14),
-              borderSide: const BorderSide(color: Color(0xFFE0E6EE)),
+              borderSide: const BorderSide(color: Color(0xFFDCE9DD)),
             ),
             focusedBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(14),
-              borderSide: const BorderSide(color: Color(0xFF93B7FF)),
+              borderSide: const BorderSide(color: Color(0xFF2E7D32)),
             ),
           ),
         ),
@@ -817,9 +837,9 @@ class _MortalityRecordTile extends StatelessWidget {
       width: double.infinity,
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: const Color(0xFFF8FAFD),
+        color: const Color(0xFFF6FAF7),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFFE6ECF2)),
+        border: Border.all(color: const Color(0xFFDCE9DD)),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -828,10 +848,10 @@ class _MortalityRecordTile extends StatelessWidget {
             width: 42,
             height: 42,
             decoration: BoxDecoration(
-              color: const Color(0xFFFFEEF0),
+              color: const Color(0xFFF4FBF6),
               borderRadius: BorderRadius.circular(14),
             ),
-            child: const Icon(Icons.sick_outlined, color: Color(0xFFFF6B6B), size: 20),
+            child: const Icon(Icons.sick_outlined, color: Color(0xFF9C6B35), size: 20),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -871,6 +891,10 @@ class _MortalityRecordTile extends StatelessWidget {
           ),
           IconButton(
             onPressed: onDelete,
+            style: IconButton.styleFrom(
+              hoverColor: const Color(0xFFE53935).withOpacity(0.08),
+              highlightColor: const Color(0xFFE53935).withOpacity(0.12),
+            ),
             icon: const Icon(Icons.delete_outline, color: Color(0xFFE53935)),
             tooltip: 'Delete record',
           ),
@@ -946,16 +970,16 @@ class _EmptyHistory extends StatelessWidget {
       width: double.infinity,
       padding: const EdgeInsets.fromLTRB(18, 28, 18, 24),
       decoration: BoxDecoration(
-        color: const Color(0xFFF8FAFD),
+        color: const Color(0xFFF6FAF7),
         borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: const Color(0xFFE6ECF2)),
+        border: Border.all(color: const Color(0xFFDCE9DD)),
       ),
       child: Column(
         children: const [
           CircleAvatar(
             radius: 18,
-            backgroundColor: Color(0xFFE9EEF7),
-            child: Icon(Icons.description_outlined, color: Color(0xFFB7C2D2)),
+            backgroundColor: Color(0xFFE8F6EA),
+            child: Icon(Icons.description_outlined, color: Color(0xFF2E7D32)),
           ),
           SizedBox(height: 16),
           Text(
@@ -963,7 +987,7 @@ class _EmptyHistory extends StatelessWidget {
             style: TextStyle(
               fontSize: 13,
               fontWeight: FontWeight.w800,
-              color: Color(0xFF8B97A8),
+              color: Color(0xFF58705A),
             ),
           ),
           SizedBox(height: 8),
@@ -972,7 +996,7 @@ class _EmptyHistory extends StatelessWidget {
             style: TextStyle(
               fontSize: 11,
               fontWeight: FontWeight.w600,
-              color: Color(0xFFA6B1C2),
+              color: Color(0xFF8D98B2),
             ),
           ),
         ],
@@ -997,29 +1021,36 @@ class _BottomNavItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final color = selected ? const Color(0xFF2E7D32) : const Color(0xFF8E9AAF);
-    return GestureDetector(
-      onTap: onTap,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: selected ? const Color(0xFFE8F6EA) : Colors.transparent,
-              borderRadius: BorderRadius.circular(16),
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(16),
+        splashColor: const Color(0xFF0BB13F).withOpacity(0.14),
+        highlightColor: const Color(0xFF0BB13F).withOpacity(0.10),
+        hoverColor: const Color(0xFF0BB13F).withOpacity(0.08),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: selected ? const Color(0xFFE8F6EA) : Colors.transparent,
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Icon(icon, color: color, size: 26),
             ),
-            child: Icon(icon, color: color, size: 26),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            label,
-            style: TextStyle(
-              color: color,
-              fontSize: 11,
-              fontWeight: FontWeight.w700,
+            const SizedBox(height: 4),
+            Text(
+              label,
+              style: TextStyle(
+                color: color,
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

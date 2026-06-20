@@ -138,6 +138,17 @@ class AlertNotificationStore extends ChangeNotifier {
     await refresh();
   }
 
+  void resetForAccountSwitch() {
+    _preferences = const AlertPreferences();
+    _alerts = const [];
+    _readAlertIds = <String>{};
+    _isLoading = false;
+    _isLoaded = false;
+    _refreshQueued = false;
+    _loadedUserId = null;
+    notifyListeners();
+  }
+
   Future<void> refresh() async {
     await _ensureLoaded();
 

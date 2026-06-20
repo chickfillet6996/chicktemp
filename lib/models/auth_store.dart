@@ -12,6 +12,7 @@ class AppUser {
   final String phoneNumber;
   final String role;
   final String profilePhotoBase64;
+  final bool startsWithEmptyControls;
 
   const AppUser({
     required this.id,
@@ -20,6 +21,7 @@ class AppUser {
     required this.phoneNumber,
     required this.role,
     required this.profilePhotoBase64,
+    required this.startsWithEmptyControls,
   });
 
   factory AppUser.fromJson(String id, Map<String, dynamic> json) {
@@ -30,6 +32,7 @@ class AppUser {
       phoneNumber: json['phone_number']?.toString() ?? '',
       role: json['role']?.toString() ?? 'manager',
       profilePhotoBase64: json['profile_photo_base64']?.toString() ?? '',
+      startsWithEmptyControls: json['starts_with_empty_controls'] == true,
     );
   }
 
@@ -71,6 +74,12 @@ class AuthStore {
   static const String rememberMeKey = 'remember_me';
   static const String rememberedEmailKey = 'remembered_email';
   static const String _rememberedUserIdKey = 'remembered_user_id';
+  static const String gmailAddressMessage =
+      'Enter a valid Gmail address ending in @gmail.com.';
+  static final RegExp _gmailAddressPattern = RegExp(
+    r'^[A-Z0-9._%+-]+@gmail\.com$',
+    caseSensitive: false,
+  );
 
   static final AuthStore instance = AuthStore._();
 
@@ -79,6 +88,10 @@ class AuthStore {
   AppUser? currentUser;
 
   String get currentUserInitials => buildInitials(currentUser?.fullName);
+
+  static bool isValidGmailAddress(String email) {
+    return _gmailAddressPattern.hasMatch(email.trim());
+  }
 
   Future<({bool enabled, String email})> loadRememberedLogin() async {
     final prefs = await SharedPreferences.getInstance();
@@ -139,6 +152,10 @@ class AuthStore {
     required String password,
   }) async {
     final normalizedEmail = email.trim().toLowerCase();
+    if (!isValidGmailAddress(normalizedEmail)) {
+      return AuthResult.failure(gmailAddressMessage);
+    }
+
     final existingUserId = await _findUserIdByEmail(normalizedEmail);
     if (existingUserId != null) {
       return AuthResult.failure('An account already exists for this email.');
@@ -154,6 +171,7 @@ class AuthStore {
       'phone_number': '',
       'role': 'manager',
       'profile_photo_base64': '',
+      'starts_with_empty_controls': true,
     };
 
     await _database.put('users/$userId.json', userJson);
@@ -170,6 +188,10 @@ class AuthStore {
     required String password,
   }) async {
     final normalizedEmail = email.trim().toLowerCase();
+    if (!isValidGmailAddress(normalizedEmail)) {
+      return AuthResult.failure(gmailAddressMessage);
+    }
+
     try {
       final userId = await _findUserIdByEmail(normalizedEmail);
       if (userId == null || userId.isEmpty) {
@@ -218,6 +240,10 @@ class AuthStore {
     }
 
     final normalizedEmail = email.trim().toLowerCase();
+    if (!isValidGmailAddress(normalizedEmail)) {
+      return AuthResult.failure(gmailAddressMessage);
+    }
+
     final isEmailChanged = normalizedEmail != user.emailAddress.toLowerCase();
     final previousEmailKey = _emailKey(user.emailAddress.toLowerCase());
     final nextEmailKey = _emailKey(normalizedEmail);
@@ -310,6 +336,9 @@ class AuthStore {
     final normalizedEmail = email.trim().toLowerCase();
     if (normalizedEmail.isEmpty) {
       return AuthResult.failure('Enter your email address.');
+    }
+    if (!isValidGmailAddress(normalizedEmail)) {
+      return AuthResult.failure(gmailAddressMessage);
     }
     if (newPassword.length < 6) {
       return AuthResult.failure('Password must be at least 6 characters.');
@@ -465,6 +494,8 @@ class AuthStore {
       'email_address': normalizedEmail,
       'phone_number': phoneNumber.trim(),
       'role': user.role,
+      'starts_with_empty_controls':
+          record['starts_with_empty_controls'] ?? user.startsWithEmptyControls,
       'profile_photo_base64':
           profilePhotoBase64 ??
           record['profile_photo_base64']?.toString() ??

@@ -1,6 +1,11 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 
 import '../models/auth_store.dart';
+import '../models/firebase_database_service.dart';
+import '../widgets/settings_back_card.dart';
 import '../widgets/settings_overlay_sheet.dart';
 import '../widgets/user_avatar_content.dart';
 
@@ -18,17 +23,23 @@ class ContactSupportScreen extends StatefulWidget {
 }
 
 class _ContactSupportScreenState extends State<ContactSupportScreen> {
+  static const String _supportEmailAddress = 'chickfillet6996@gmail.com';
+
   final TextEditingController _subjectController = TextEditingController();
   final TextEditingController _messageController = TextEditingController();
+  final HttpClient _httpClient = HttpClient()
+    ..connectionTimeout = const Duration(seconds: 15);
+  bool _isSending = false;
 
   @override
   void dispose() {
+    _httpClient.close(force: true);
     _subjectController.dispose();
     _messageController.dispose();
     super.dispose();
   }
 
-  void _sendMessage() {
+  Future<void> _sendMessage() async {
     final subject = _subjectController.text.trim();
     final message = _messageController.text.trim();
 
@@ -42,15 +53,134 @@ class _ContactSupportScreenState extends State<ContactSupportScreen> {
       return;
     }
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Message saved. Support sending is not enabled right now.'),
-        behavior: SnackBarBehavior.floating,
-      ),
+    final user = AuthStore.instance.currentUser;
+    final senderName = user?.fullName.trim().isNotEmpty == true
+        ? user!.fullName.trim()
+        : 'Unknown user';
+    final senderEmail = user?.emailAddress.trim().isNotEmpty == true
+        ? user!.emailAddress.trim()
+        : 'No email provided';
+    final senderPhone = user?.phoneNumber.trim().isNotEmpty == true
+        ? user!.phoneNumber.trim()
+        : 'No phone provided';
+    final emailBody =
+        '''
+Support request from: $senderName
+Email: $senderEmail
+Phone: $senderPhone
+
+$message
+''';
+    final ticketId = 'ticket_${DateTime.now().millisecondsSinceEpoch}';
+    final createdAt = DateTime.now().toUtc().toIso8601String();
+    final supportTicket = <String, dynamic>{
+      'ticket_id': ticketId,
+      'subject': subject,
+      'message': message,
+      'created_at': createdAt,
+      'status': 'open',
+      'user_id': user?.id ?? '',
+      'full_name': senderName,
+      'email_address': senderEmail,
+      'phone_number': senderPhone,
+    };
+
+    setState(() {
+      _isSending = true;
+    });
+
+    try {
+      await FirebaseDatabaseService.instance.put(
+        'support_tickets/$ticketId.json',
+        supportTicket,
+      );
+
+      var emailSubmitted = false;
+      try {
+        await _sendSupportEmail(
+          subject: subject,
+          senderName: senderName,
+          senderEmail: senderEmail,
+          senderPhone: senderPhone,
+          emailBody: emailBody,
+        );
+        emailSubmitted = true;
+      } catch (_) {
+        emailSubmitted = false;
+      }
+
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            emailSubmitted
+                ? 'Support message saved and email request submitted.'
+                : 'Support message saved. Email needs setup first.',
+          ),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+
+      _subjectController.clear();
+      _messageController.clear();
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Unable to send your message right now.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSending = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _sendSupportEmail({
+    required String subject,
+    required String senderName,
+    required String senderEmail,
+    required String senderPhone,
+    required String emailBody,
+  }) async {
+    final request = await _httpClient.postUrl(
+      Uri.https('formsubmit.co', '/ajax/$_supportEmailAddress'),
+    );
+    request.headers.contentType = ContentType.json;
+    request.headers.set(HttpHeaders.acceptHeader, ContentType.json.mimeType);
+    request.write(
+      jsonEncode({
+        'name': senderName,
+        'email': senderEmail,
+        'phone': senderPhone,
+        'subject': subject,
+        'message': emailBody,
+        '_subject': 'ChickTemp Support: $subject',
+        '_captcha': 'false',
+        '_template': 'table',
+      }),
     );
 
-    _subjectController.clear();
-    _messageController.clear();
+    final response = await request.close().timeout(const Duration(seconds: 20));
+    final responseBody = await response.transform(utf8.decoder).join();
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw const SocketException('Support email request failed.');
+    }
+
+    final decoded = jsonDecode(responseBody);
+    if (decoded is Map<String, dynamic> && decoded['success'] == false) {
+      throw const SocketException('Support email request was rejected.');
+    }
   }
 
   @override
@@ -62,16 +192,7 @@ class _ContactSupportScreenState extends State<ContactSupportScreen> {
         padding: const EdgeInsets.fromLTRB(22, 18, 22, 22),
         children: [
           _TopBar(onBack: () => Navigator.of(context).pop()),
-          const Divider(height: 30, color: Color(0xFFE7EBE6)),
-          const Text(
-            'Contact Support',
-            style: TextStyle(
-              color: Color(0xFF1E293B),
-              fontSize: 18,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-          const SizedBox(height: 18),
+          const SizedBox(height: 30),
           const _FieldLabel('Subject'),
           const SizedBox(height: 8),
           _SupportField(
@@ -91,7 +212,7 @@ class _ContactSupportScreenState extends State<ContactSupportScreen> {
             width: double.infinity,
             height: 48,
             child: FilledButton.icon(
-              onPressed: _sendMessage,
+              onPressed: _isSending ? null : _sendMessage,
               style: FilledButton.styleFrom(
                 backgroundColor: const Color(0xFF0BB13F),
                 foregroundColor: Colors.white,
@@ -99,10 +220,19 @@ class _ContactSupportScreenState extends State<ContactSupportScreen> {
                   borderRadius: BorderRadius.circular(16),
                 ),
               ),
-              icon: const Icon(Icons.send_outlined, size: 16),
-              label: const Text(
-                'Send Message',
-                style: TextStyle(fontWeight: FontWeight.w800),
+              icon: _isSending
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                      ),
+                    )
+                  : const Icon(Icons.send_outlined, size: 16),
+              label: Text(
+                _isSending ? 'Sending...' : 'Send Message',
+                style: const TextStyle(fontWeight: FontWeight.w800),
               ),
             ),
           ),
@@ -119,35 +249,7 @@ class _TopBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [
-        InkWell(
-          onTap: onBack,
-          borderRadius: BorderRadius.circular(16),
-          child: const Padding(
-            padding: EdgeInsets.symmetric(vertical: 6),
-            child: Row(
-              children: [
-                Icon(
-                  Icons.arrow_back_rounded,
-                  color: Color(0xFF41536D),
-                  size: 20,
-                ),
-                SizedBox(width: 6),
-                Text(
-                  'Back',
-                  style: TextStyle(
-                    color: Color(0xFF41536D),
-                    fontSize: 14,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ],
-    );
+    return SettingsBackCard(onTap: onBack);
   }
 }
 
@@ -234,7 +336,7 @@ class _HeaderBand extends StatelessWidget {
           borderRadius: BorderRadius.circular(28),
         ),
         child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
             const Expanded(
               child: Column(

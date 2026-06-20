@@ -107,20 +107,61 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final shouldDelete = await showDialog<bool>(
       context: context,
       builder: (context) {
-        return AlertDialog(
-          title: const Text('Delete Batch?'),
-          content: Text('Remove "${batch.name}" from your batch list?'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(false),
-              child: const Text('Cancel'),
+        return Dialog(
+          backgroundColor: Colors.transparent,
+          insetPadding: const EdgeInsets.symmetric(horizontal: 24),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(28),
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(28),
+            child: SplashBackground(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(24, 24, 24, 18),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Delete Batch?',
+                      style: TextStyle(
+                        color: Color(0xFF1F2D21),
+                        fontSize: 22,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    const SizedBox(height: 18),
+                    Text(
+                      'Remove "${batch.name}" from your batch list?',
+                      style: const TextStyle(
+                        color: Color(0xFF2F3D31),
+                        fontSize: 13,
+                        fontWeight: FontWeight.w400,
+                      ),
+                    ),
+                    const SizedBox(height: 26),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        TextButton(
+                          onPressed: () => Navigator.of(context).pop(false),
+                          child: const Text('Cancel'),
+                        ),
+                        const SizedBox(width: 12),
+                        TextButton(
+                          onPressed: () => Navigator.of(context).pop(true),
+                          style: TextButton.styleFrom(
+                            foregroundColor: Colors.red,
+                          ),
+                          child: const Text('Delete'),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
             ),
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(true),
-              style: TextButton.styleFrom(foregroundColor: Colors.red),
-              child: const Text('Delete'),
-            ),
-          ],
+          ),
         );
       },
     );
@@ -225,7 +266,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         borderRadius: BorderRadius.circular(28),
                       ),
                       child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+                        crossAxisAlignment: CrossAxisAlignment.center,
                         children: [
                           const Expanded(
                             child: Column(
@@ -276,6 +317,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                               }
                             },
                             borderRadius: BorderRadius.circular(14),
+                            splashColor: Colors.white.withOpacity(0.18),
+                            highlightColor: Colors.white.withOpacity(0.12),
+                            hoverColor: Colors.white.withOpacity(0.08),
                             child: Container(
                               width: 46,
                               height: 46,
@@ -457,7 +501,10 @@ class _BatchCard extends StatelessWidget {
       child: InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(18),
-        child: Container(
+        splashColor: const Color(0xFF0BB13F).withOpacity(0.14),
+        highlightColor: const Color(0xFF0BB13F).withOpacity(0.10),
+        hoverColor: const Color(0xFF0BB13F).withOpacity(0.08),
+        child: Ink(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
             color: Colors.white,
@@ -514,7 +561,7 @@ class _BatchCard extends StatelessWidget {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       _CircleActionButton(
-                        icon: Icons.edit_outlined,
+                        icon: Icons.edit_rounded,
                         backgroundColor: const Color(0xFFF3F8FF),
                         borderColor: const Color(0xFFD9E4F3),
                         iconColor: const Color(0xFF5F7DA8),
@@ -523,8 +570,8 @@ class _BatchCard extends StatelessWidget {
                       const SizedBox(width: 8),
                       _CircleActionButton(
                         icon: Icons.delete_outline_rounded,
-                        backgroundColor: const Color(0xFFFFF1F1),
-                        borderColor: const Color(0xFFFFD3D3),
+                        backgroundColor: const Color(0xFFF7F9FB),
+                        borderColor: const Color(0xFFE6ECF2),
                         iconColor: const Color(0xFFD64545),
                         onTap: onDelete,
                       ),
@@ -587,7 +634,10 @@ class _CircleActionButton extends StatelessWidget {
       child: InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(999),
-        child: Container(
+        splashColor: iconColor.withOpacity(0.18),
+        highlightColor: iconColor.withOpacity(0.12),
+        hoverColor: iconColor.withOpacity(0.08),
+        child: Ink(
           width: 38,
           height: 38,
           decoration: BoxDecoration(
@@ -659,29 +709,36 @@ class _BottomNavItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final color = selected ? const Color(0xFF2E7D32) : const Color(0xFF8E9AAF);
-    return GestureDetector(
-      onTap: onTap,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: selected ? const Color(0xFFE8F6EA) : Colors.transparent,
-              borderRadius: BorderRadius.circular(16),
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(16),
+        splashColor: const Color(0xFF0BB13F).withOpacity(0.14),
+        highlightColor: const Color(0xFF0BB13F).withOpacity(0.10),
+        hoverColor: const Color(0xFF0BB13F).withOpacity(0.08),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: selected ? const Color(0xFFE8F6EA) : Colors.transparent,
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Icon(icon, color: color, size: 26),
             ),
-            child: Icon(icon, color: color, size: 26),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            label,
-            style: TextStyle(
-              color: color,
-              fontSize: 11,
-              fontWeight: FontWeight.w700,
+            const SizedBox(height: 4),
+            Text(
+              label,
+              style: TextStyle(
+                color: color,
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

@@ -230,7 +230,7 @@ class _FeederScreenState extends State<FeederScreen> {
                     borderRadius: BorderRadius.circular(28),
                   ),
                   child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                    crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
                       const Expanded(
                         child: Column(
@@ -403,7 +403,11 @@ class _FeederScreenState extends State<FeederScreen> {
                 selected: _selectedNavIndex == 1,
                 onTap: () {
                   Navigator.of(context).pushReplacement(
-                    MaterialPageRoute(builder: (_) => const AnalyticsScreen()),
+                    MaterialPageRoute(
+                      builder: (_) => AnalyticsScreen(
+                        initialBatchName: widget.batchName,
+                      ),
+                    ),
                   );
                 },
               ),
@@ -413,7 +417,11 @@ class _FeederScreenState extends State<FeederScreen> {
                 selected: _selectedNavIndex == 2,
                 onTap: () {
                   Navigator.of(context).pushReplacement(
-                    MaterialPageRoute(builder: (_) => const ReportsScreen()),
+                    MaterialPageRoute(
+                      builder: (_) => ReportsScreen(
+                        initialBatchName: widget.batchName,
+                      ),
+                    ),
                   );
                 },
               ),
@@ -634,6 +642,9 @@ class _FeederDropdownHeader extends StatelessWidget {
       child: InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(24),
+        splashFactory: NoSplash.splashFactory,
+        splashColor: Colors.transparent,
+        highlightColor: Colors.transparent,
         child: Padding(
           padding: const EdgeInsets.all(16),
           child: Row(

@@ -3,9 +3,14 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 class SplashBackground extends StatefulWidget {
-  const SplashBackground({super.key, required this.child});
+  const SplashBackground({
+    super.key,
+    required this.child,
+    this.showLineArt = true,
+  });
 
   final Widget child;
+  final bool showLineArt;
 
   @override
   State<SplashBackground> createState() => _SplashBackgroundState();
@@ -85,15 +90,16 @@ class _SplashBackgroundState extends State<SplashBackground>
                   size: 215,
                 ),
               ),
-              Positioned.fill(
-                child: IgnorePointer(
-                  child: CustomPaint(
-                    painter: _BackgroundLinePainter(
-                      color: _lineGreen.withOpacity(0.48 + (ambient * 0.08)),
+              if (widget.showLineArt)
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: CustomPaint(
+                      painter: _BackgroundLinePainter(
+                        color: _lineGreen.withOpacity(0.48 + (ambient * 0.08)),
+                      ),
                     ),
                   ),
                 ),
-              ),
               Positioned.fill(
                 child: IgnorePointer(
                   child: DecoratedBox(
@@ -112,18 +118,19 @@ class _SplashBackgroundState extends State<SplashBackground>
                   ),
                 ),
               ),
-              Positioned(
-                bottom: -34 + (floatY * 0.22),
-                left: -34 - (floatX * 0.15),
-                child: IgnorePointer(
-                  child: CustomPaint(
-                    size: const Size(300, 300),
-                    painter: _ChickenSilhouettePainter(
-                      color: _lineGreen.withOpacity(0.48 + (ambient * 0.05)),
+              if (widget.showLineArt)
+                Positioned(
+                  bottom: -34 + (floatY * 0.22),
+                  left: -34 - (floatX * 0.15),
+                  child: IgnorePointer(
+                    child: CustomPaint(
+                      size: const Size(300, 300),
+                      painter: _ChickenSilhouettePainter(
+                        color: _lineGreen.withOpacity(0.48 + (ambient * 0.05)),
+                      ),
                     ),
                   ),
                 ),
-              ),
               child!,
             ],
           ),

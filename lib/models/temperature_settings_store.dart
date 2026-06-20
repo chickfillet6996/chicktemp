@@ -66,6 +66,13 @@ class TemperatureSettingsStore extends ChangeNotifier {
     }
   }
 
+  void resetForAccountSwitch() {
+    _settingsByBatch.clear();
+    _loadedKeys.clear();
+    _loadingKeys.clear();
+    notifyListeners();
+  }
+
   void updateFor(
     String batchName, {
     required double minTemperature,

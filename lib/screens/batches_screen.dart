@@ -23,7 +23,7 @@ class _CreateBatchScreenState extends State<CreateBatchScreen>
     with SingleTickerProviderStateMixin {
   late final TextEditingController _batchNameController;
   late final TextEditingController _chickensController;
-  late DateTime _selectedDate;
+  late DateTime _selectedStartDate;
 
   late AnimationController _controller;
   late Animation<double> _fadeAnim;
@@ -39,7 +39,7 @@ class _CreateBatchScreenState extends State<CreateBatchScreen>
     _chickensController = TextEditingController(
       text: _extractChickenCount(initialBatch?.birdsLabel) ?? '500',
     );
-    _selectedDate = initialBatch != null
+    _selectedStartDate = initialBatch != null
         ? _parseStartedAtDate(initialBatch.startedAt)
         : DateTime.now();
     _controller = AnimationController(
@@ -71,7 +71,16 @@ class _CreateBatchScreenState extends State<CreateBatchScreen>
   }
 
   DateTime _parseStartedAtDate(String startedAt) {
-    final rawDate = startedAt.replaceFirst(RegExp(r'^Started:\s*'), '').trim();
+    return _tryParseLabelDate(startedAt) ?? DateTime.now();
+  }
+
+  DateTime? _tryParseLabelDate(String value) {
+    final rawDate = value
+        .replaceFirst(
+          RegExp(r'^(Started|Start):\s*', caseSensitive: false),
+          '',
+        )
+        .trim();
     final formats = <DateFormat>[
       DateFormat('MMMM d, yyyy'),
       DateFormat('MMM d, yyyy'),
@@ -87,7 +96,7 @@ class _CreateBatchScreenState extends State<CreateBatchScreen>
       }
     }
 
-    return DateTime.now();
+    return DateTime.tryParse(rawDate);
   }
 
   String _formatStartedAt(DateTime date) {
@@ -106,10 +115,10 @@ class _CreateBatchScreenState extends State<CreateBatchScreen>
     return 'Broiler Batch $nextNumber';
   }
 
-  Future<void> _pickDate() async {
+  Future<void> _pickStartDate() async {
     final picked = await showDatePicker(
       context: context,
-      initialDate: _selectedDate,
+      initialDate: _selectedStartDate,
       firstDate: DateTime(2020),
       lastDate: DateTime(2030),
       builder: (context, child) {
@@ -127,7 +136,7 @@ class _CreateBatchScreenState extends State<CreateBatchScreen>
       },
     );
     if (picked != null) {
-      setState(() => _selectedDate = picked);
+      setState(() => _selectedStartDate = picked);
     }
   }
 
@@ -178,9 +187,12 @@ class _CreateBatchScreenState extends State<CreateBatchScreen>
                               ),
                               child: Padding(
                                 padding: const EdgeInsets.all(11),
-                                child: Image.asset(
-                                  'assets/images/chicklogo.png',
-                                  fit: BoxFit.contain,
+                                child: ClipRRect(
+                                  borderRadius: BorderRadius.circular(12),
+                                  child: Image.asset(
+                                    'assets/images/chicklogo.png',
+                                    fit: BoxFit.contain,
+                                  ),
                                 ),
                               ),
                             ),
@@ -217,44 +229,9 @@ class _CreateBatchScreenState extends State<CreateBatchScreen>
                             const SizedBox(height: 14),
                             _FieldLabel('START DATE'),
                             const SizedBox(height: 8),
-                            GestureDetector(
-                              onTap: _pickDate,
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 12,
-                                  vertical: 13,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFFF8FAFD),
-                                  borderRadius: BorderRadius.circular(14),
-                                  border: Border.all(color: const Color(0xFFDDE6EE)),
-                                ),
-                                child: Row(
-                                  children: [
-                                    const Icon(
-                                      Icons.calendar_today_outlined,
-                                      size: 18,
-                                      color: Color(0xFFB0BCCB),
-                                    ),
-                                    const SizedBox(width: 10),
-                                    Expanded(
-                                      child: Text(
-                                        DateFormat('dd/MM/yyyy').format(_selectedDate),
-                                        style: const TextStyle(
-                                          fontSize: 14,
-                                          fontWeight: FontWeight.w500,
-                                          color: Color(0xFF172033),
-                                        ),
-                                      ),
-                                    ),
-                                    const Icon(
-                                      Icons.calendar_month_outlined,
-                                      size: 18,
-                                      color: Color(0xFF172033),
-                                    ),
-                                  ],
-                                ),
-                              ),
+                            _DatePickerField(
+                              value: _selectedStartDate,
+                              onTap: _pickStartDate,
                             ),
                             const SizedBox(height: 14),
                             _FieldLabel('TOTAL CHICKENS'),
@@ -284,13 +261,17 @@ class _CreateBatchScreenState extends State<CreateBatchScreen>
                                   Navigator.of(context).pop(
                                     widget.batch?.copyWith(
                                           name: name,
-                                          startedAt: _formatStartedAt(_selectedDate),
+                                          startedAt: _formatStartedAt(
+                                            _selectedStartDate,
+                                          ),
                                           birdsLabel: '$chickens Birds',
                                         ) ??
                                         BatchItem(
                                           name: name,
                                           status: 'ACTIVE',
-                                          startedAt: _formatStartedAt(_selectedDate),
+                                          startedAt: _formatStartedAt(
+                                            _selectedStartDate,
+                                          ),
                                           dayLabel: 'Day 1 / 45',
                                           birdsLabel: '$chickens Birds',
                                         ),
@@ -374,6 +355,56 @@ class _FieldLabel extends StatelessWidget {
           fontWeight: FontWeight.w700,
           color: Color(0xFF5F6F84),
           letterSpacing: 0.8,
+        ),
+      ),
+    );
+  }
+}
+
+class _DatePickerField extends StatelessWidget {
+  final DateTime value;
+  final VoidCallback onTap;
+
+  const _DatePickerField({
+    required this.value,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 13),
+        decoration: BoxDecoration(
+          color: const Color(0xFFF8FAFD),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: const Color(0xFFDDE6EE)),
+        ),
+        child: Row(
+          children: [
+            const Icon(
+              Icons.calendar_today_outlined,
+              size: 18,
+              color: Color(0xFFB0BCCB),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                DateFormat('dd/MM/yyyy').format(value),
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                  color: Color(0xFF172033),
+                ),
+              ),
+            ),
+            const Icon(
+              Icons.calendar_month_outlined,
+              size: 18,
+              color: Color(0xFF172033),
+            ),
+          ],
         ),
       ),
     );

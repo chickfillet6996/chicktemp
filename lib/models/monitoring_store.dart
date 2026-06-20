@@ -192,6 +192,14 @@ class MonitoringStore extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
+  void resetForAccountSwitch() {
+    _telemetryByBatch.clear();
+    _sensorBatchName = null;
+    _cacheRestoreRequests.clear();
+    _lastTelemetryPersistAt.clear();
+    notifyListeners();
+  }
+
   Future<void> _tick() async {
     if (_polling) {
       return;

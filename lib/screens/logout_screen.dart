@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../models/account_session_reset.dart';
 import '../models/auth_store.dart';
-import '../models/batch_store.dart';
 import 'login_screen.dart';
 
 class LogoutScreen {
@@ -65,7 +65,7 @@ class LogoutScreen {
                       onPressed: () async {
                         Navigator.of(dialogContext).pop();
                         await AuthStore.instance.signOut();
-                        BatchStore.instance.clear();
+                        resetAccountScopedStores();
                         if (!context.mounted) {
                           return;
                         }

@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../models/account_session_reset.dart';
 import '../models/auth_store.dart';
 import '../models/batch_store.dart';
 import 'dashboards_screen.dart';
@@ -86,10 +87,11 @@ class _SplashScreenState extends State<SplashScreen>
   Future<void> _restoreRememberedSession() async {
     final restored = await AuthStore.instance.restoreRememberedSession();
     if (restored) {
+      resetAccountScopedStores();
       try {
         await BatchStore.instance.loadForCurrentUser();
       } on Object {
-        BatchStore.instance.clear();
+        resetAccountScopedStores();
       }
     }
 
@@ -373,6 +375,9 @@ class _SplashScreenState extends State<SplashScreen>
                                     backgroundColor: Colors.transparent,
                                     shadowColor: Colors.transparent,
                                     foregroundColor: Colors.white,
+                                    overlayColor: Colors.white.withOpacity(
+                                      0.14,
+                                    ),
                                     elevation: 0,
                                     shape: RoundedRectangleBorder(
                                       borderRadius: BorderRadius.circular(30),

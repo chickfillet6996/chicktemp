@@ -1,6 +1,9 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 import '../models/auth_store.dart';
+import '../widgets/settings_back_card.dart';
 import '../widgets/settings_overlay_sheet.dart';
 import '../widgets/user_avatar_content.dart';
 
@@ -18,67 +21,266 @@ class AboutAppScreen extends StatelessWidget {
     return SettingsOverlaySheet(
       headerBand: const _HeaderBand(),
       backgroundPainter: const _LeafLinePainter(),
-      child: ListView(
-        padding: const EdgeInsets.fromLTRB(22, 18, 22, 22),
-        children: [
-          _TopBar(onBack: () => Navigator.of(context).pop()),
-          const Divider(height: 30, color: Color(0xFFE7EBE6)),
-          const SizedBox(height: 10),
-          const _AboutHeroCard(),
-          const SizedBox(height: 18),
-          const _AboutDetailsCard(),
-          const SizedBox(height: 26),
-          const _InfoGroup(
-            title: 'DEVELOPERS',
-            lines: [
-              'Aaron Asuncion',
-              'Kurt Yu',
-              'Kyle Reodique',
-              'Dustin Juri',
-            ],
-          ),
-          const SizedBox(height: 18),
-          const _InfoGroup(
-            title: 'SUPPORT EMAIL',
-            lines: ['chicktfillet6996@gmail.com'],
-          ),
-        ],
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          const horizontalPadding = 22.0;
+          final compact = constraints.maxHeight < 560;
+          final contentWidth = math.max(
+            0.0,
+            constraints.maxWidth - (horizontalPadding * 2),
+          );
+
+          return Padding(
+            padding: EdgeInsets.fromLTRB(
+              horizontalPadding,
+              compact ? 12 : 18,
+              horizontalPadding,
+              compact ? 14 : 22,
+            ),
+            child: Column(
+              children: [
+                _TopBar(onBack: () => Navigator.of(context).pop()),
+                SizedBox(height: compact ? 18 : 40),
+                Expanded(
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.topCenter,
+                    child: SizedBox(
+                      width: contentWidth,
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const _AboutHeroCard(),
+                          SizedBox(height: compact ? 12 : 18),
+                          const _AboutDetailsCard(),
+                          SizedBox(height: compact ? 16 : 26),
+                          const _InfoGroup(
+                            title: 'DEVELOPERS',
+                            lines: [
+                              'Aaron Asuncion',
+                              'Kurt Yu',
+                              'Kyle Reodique',
+                              'Dustin Juri',
+                            ],
+                          ),
+                          SizedBox(height: compact ? 12 : 18),
+                          const _InfoGroup(
+                            title: 'SUPPORT EMAIL',
+                            lines: ['chicktfillet6996@gmail.com'],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
       ),
     );
   }
 }
 
-class _AboutHeroCard extends StatelessWidget {
+class _AboutHeroCard extends StatefulWidget {
   const _AboutHeroCard();
 
   @override
+  State<_AboutHeroCard> createState() => _AboutHeroCardState();
+}
+
+class _AboutHeroCardState extends State<_AboutHeroCard>
+    with TickerProviderStateMixin {
+  late final AnimationController _introController;
+  late final AnimationController _ambientController;
+  late final Animation<double> _fadeAnim;
+  late final Animation<double> _scaleAnim;
+  late final Animation<double> _haloScaleAnim;
+  late final Animation<double> _haloOpacityAnim;
+
+  @override
+  void initState() {
+    super.initState();
+    _introController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1400),
+    );
+    _ambientController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 5000),
+    )..repeat(reverse: true);
+
+    _fadeAnim = CurvedAnimation(
+      parent: _introController,
+      curve: const Interval(0.0, 0.65, curve: Curves.easeOut),
+    );
+    _scaleAnim = Tween<double>(begin: 0.84, end: 1).animate(
+      CurvedAnimation(
+        parent: _introController,
+        curve: const Interval(0.0, 0.55, curve: Curves.easeOutBack),
+      ),
+    );
+    _haloScaleAnim = Tween<double>(begin: 0.94, end: 1.06).animate(
+      CurvedAnimation(parent: _ambientController, curve: Curves.easeInOut),
+    );
+    _haloOpacityAnim = Tween<double>(begin: 0.14, end: 0.26).animate(
+      CurvedAnimation(parent: _ambientController, curve: Curves.easeInOut),
+    );
+
+    _introController.forward();
+  }
+
+  @override
+  void dispose() {
+    _introController.dispose();
+    _ambientController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    const brandDarkGreen = Color(0xFF1B5E20);
+    const brandGreen = Color(0xFF4CAF50);
+
     return Center(
-      child: Container(
-        width: 110,
-        height: 110,
-        padding: const EdgeInsets.all(18),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(28),
-          border: Border.all(color: const Color(0xFFE7ECE5)),
-          boxShadow: [
-            BoxShadow(
-              color: const Color(0xFF0BB13F).withOpacity(0.10),
-              blurRadius: 18,
-              offset: const Offset(0, 8),
+      child: AnimatedBuilder(
+        animation: Listenable.merge([_introController, _ambientController]),
+        builder: (context, child) {
+          final ambient = Curves.easeInOut.transform(_ambientController.value);
+          final floatY = math.sin(ambient * math.pi * 2) * 7;
+
+          return FadeTransition(
+            opacity: _fadeAnim,
+            child: Transform.translate(
+              offset: Offset(0, floatY),
+              child: ScaleTransition(
+                scale: _scaleAnim,
+                child: SizedBox(
+                  width: 138,
+                  height: 126,
+                  child: Stack(
+                    clipBehavior: Clip.none,
+                    alignment: Alignment.center,
+                    children: [
+                      Transform.scale(
+                        scale: _haloScaleAnim.value,
+                        child: Container(
+                          width: 136,
+                          height: 136,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            gradient: RadialGradient(
+                              colors: [
+                                brandGreen.withOpacity(
+                                  _haloOpacityAnim.value,
+                                ),
+                                brandGreen.withOpacity(0.02),
+                                Colors.transparent,
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                      Container(
+                        width: 110,
+                        height: 110,
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(28),
+                          border: Border.all(color: const Color(0xFFE7ECE5)),
+                          boxShadow: [
+                            BoxShadow(
+                              color: brandGreen.withOpacity(0.15),
+                              blurRadius: 25,
+                              offset: const Offset(0, 10),
+                            ),
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.04),
+                              blurRadius: 8,
+                              offset: const Offset(0, 4),
+                            ),
+                          ],
+                        ),
+                        child: Center(
+                          child: Container(
+                            width: 76,
+                            height: 76,
+                            decoration: BoxDecoration(
+                              color: brandDarkGreen,
+                              borderRadius: BorderRadius.circular(18),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: brandDarkGreen.withOpacity(0.15),
+                                  blurRadius: 10,
+                                  offset: const Offset(0, 4),
+                                ),
+                              ],
+                            ),
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(18),
+                              child: Stack(
+                                children: [
+                                  Positioned.fill(
+                                    child: Transform.scale(
+                                      scale: 1.16,
+                                      child: Image.asset(
+                                        'assets/images/chicklogo.png',
+                                        fit: BoxFit.cover,
+                                        errorBuilder:
+                                            (context, error, stackTrace) {
+                                              return Container(
+                                                decoration: const BoxDecoration(
+                                                  gradient: LinearGradient(
+                                                    colors: [
+                                                      Color(0xFF0E5023),
+                                                      Color(0xFF1B5E20),
+                                                    ],
+                                                    begin: Alignment.topLeft,
+                                                    end: Alignment.bottomRight,
+                                                  ),
+                                                ),
+                                                child: const Icon(
+                                                  Icons.device_thermostat,
+                                                  color: Colors.white,
+                                                  size: 34,
+                                                ),
+                                              );
+                                            },
+                                      ),
+                                    ),
+                                  ),
+                                  Positioned.fill(
+                                    child: Transform.translate(
+                                      offset: Offset((ambient - 0.5) * 32, 0),
+                                      child: Container(
+                                        decoration: BoxDecoration(
+                                          gradient: LinearGradient(
+                                            colors: [
+                                              Colors.transparent,
+                                              Colors.white.withOpacity(0.18),
+                                              Colors.transparent,
+                                            ],
+                                            stops: const [0.22, 0.5, 0.78],
+                                            begin: Alignment.topLeft,
+                                            end: Alignment.bottomRight,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
             ),
-          ],
-        ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(18),
-          child: Image.asset(
-            'assets/images/chicklogo.png',
-            fit: BoxFit.cover,
-            width: double.infinity,
-            height: double.infinity,
-          ),
-        ),
+          );
+        },
       ),
     );
   }
@@ -110,20 +312,21 @@ class _AboutDetailsCard extends StatelessWidget {
             'ChickTemp',
             textAlign: TextAlign.center,
             style: TextStyle(
-              fontSize: 22,
-              fontWeight: FontWeight.w800,
-              color: Color(0xFF172033),
+              fontSize: 25,
+              fontWeight: FontWeight.w900,
+              color: Color(0xFF16231A),
+              height: 1.05,
             ),
           ),
-          SizedBox(height: 14),
+          SizedBox(height: 12),
           Text(
             'The smartest IoT-based poultry environmental control application. Built for efficiency, designed for farmers.',
             textAlign: TextAlign.center,
             style: TextStyle(
-              fontSize: 13,
-              height: 1.55,
-              color: Color(0xFF6B7280),
-              fontWeight: FontWeight.w500,
+              fontSize: 13.5,
+              height: 1.62,
+              color: Color(0xFF5E6C63),
+              fontWeight: FontWeight.w600,
             ),
           ),
         ],
@@ -139,35 +342,7 @@ class _TopBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [
-        InkWell(
-          onTap: onBack,
-          borderRadius: BorderRadius.circular(16),
-          child: const Padding(
-            padding: EdgeInsets.symmetric(vertical: 6),
-            child: Row(
-              children: [
-                Icon(
-                  Icons.arrow_back_rounded,
-                  color: Color(0xFF41536D),
-                  size: 20,
-                ),
-                SizedBox(width: 6),
-                Text(
-                  'Back',
-                  style: TextStyle(
-                    color: Color(0xFF41536D),
-                    fontSize: 14,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ],
-    );
+    return SettingsBackCard(onTap: onBack);
   }
 }
 
@@ -185,28 +360,29 @@ class _InfoGroup extends StatelessWidget {
           title,
           textAlign: TextAlign.center,
           style: const TextStyle(
-            fontSize: 12,
-            fontWeight: FontWeight.w800,
-            color: Color(0xFFA4ACBA),
-            letterSpacing: 0.35,
+            fontSize: 11.5,
+            fontWeight: FontWeight.w900,
+            color: Color(0xFF7A8A81),
+            letterSpacing: 0.65,
+            height: 1.1,
           ),
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 13),
         ...lines.map(
           (line) => Padding(
-            padding: const EdgeInsets.only(bottom: 8),
+            padding: const EdgeInsets.only(bottom: 7),
             child: Text(
               line,
               textAlign: TextAlign.center,
               style: TextStyle(
-                fontSize: 14,
+                fontSize: title == 'SUPPORT EMAIL' ? 13.5 : 14.5,
                 fontWeight: title == 'SUPPORT EMAIL'
-                    ? FontWeight.w600
-                    : FontWeight.w500,
+                    ? FontWeight.w700
+                    : FontWeight.w600,
                 color: title == 'SUPPORT EMAIL'
-                    ? const Color(0xFF8D97B4)
-                    : const Color(0xFF344054),
-                height: 1.45,
+                    ? const Color(0xFF61716A)
+                    : const Color(0xFF2D3C34),
+                height: 1.42,
               ),
             ),
           ),
@@ -235,7 +411,7 @@ class _HeaderBand extends StatelessWidget {
           borderRadius: BorderRadius.circular(28),
         ),
         child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
             const Expanded(
               child: Column(

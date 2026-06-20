@@ -101,6 +101,16 @@ class EnvironmentalLogStore extends ChangeNotifier {
   static const Duration recordingInterval = Duration(minutes: 15);
   static const Duration retryInterval = Duration(seconds: 10);
 
+  void resetForAccountSwitch() {
+    _recordingBatchKeys.clear();
+    _lastRecordAttempts.clear();
+    _lastRecordedAtByKey.clear();
+    _syncedLogIdsByUser.clear();
+    _loadedSyncedUsers.clear();
+    _syncingUsers.clear();
+    notifyListeners();
+  }
+
   Future<void> recordTelemetryIfDue({
     required BatchItem batch,
     required double temperature,
@@ -191,6 +201,9 @@ class EnvironmentalLogStore extends ChangeNotifier {
         for (final entry in response.entries) {
           final value = entry.value;
           if (value is Map<String, dynamic>) {
+            if (!_belongsToCurrentUser(value, userId)) {
+              continue;
+            }
             logsById[entry.key] = EnvironmentalLog.fromJson(entry.key, value);
           }
         }
@@ -267,6 +280,9 @@ class EnvironmentalLogStore extends ChangeNotifier {
       if (value is! Map<String, dynamic>) {
         continue;
       }
+      if (!_belongsToCurrentUser(value, userId)) {
+        continue;
+      }
 
       final log = EnvironmentalLog.fromJson(entry.key, value);
       if (!validBatchIds.contains(log.batchId)) {
@@ -285,6 +301,13 @@ class EnvironmentalLogStore extends ChangeNotifier {
         .replaceAll(RegExp(r'_+'), '_')
         .replaceAll(RegExp(r'^_|_$'), '');
     return key.isEmpty ? 'default_batch' : key;
+  }
+
+  bool _belongsToCurrentUser(Map<String, dynamic> json, String? userId) {
+    if (userId == null || userId.isEmpty) {
+      return false;
+    }
+    return json['user_id']?.toString() == userId;
   }
 
   String _lastRecordedTimestampKey(String recordKey) {

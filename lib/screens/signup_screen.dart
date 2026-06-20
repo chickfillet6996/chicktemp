@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../models/account_session_reset.dart';
 import '../models/auth_store.dart';
 import '../models/batch_store.dart';
 import '../widgets/auth_animated_logo_header.dart';
@@ -63,8 +64,8 @@ class _SignUpScreenState extends State<SignUpScreen>
       _showMessage('Fill in your name, email, and password.');
       return;
     }
-    if (!email.contains('@')) {
-      _showMessage('Enter a valid email address.');
+    if (!AuthStore.isValidGmailAddress(email)) {
+      _showMessage(AuthStore.gmailAddressMessage);
       return;
     }
     if (password.length < 6) {
@@ -93,7 +94,7 @@ class _SignUpScreenState extends State<SignUpScreen>
         return;
       }
 
-      BatchStore.instance.clear();
+      resetAccountScopedStores();
       await BatchStore.instance.saveAllForCurrentUser();
       if (!mounted) {
         return;
@@ -383,6 +384,14 @@ class _SignUpScreenState extends State<SignUpScreen>
                                     iconSize: extraShortScreen ? 18.0 : 20.0,
                                     fontSize: extraShortScreen ? 14.0 : 15.0,
                                     suffixIcon: IconButton(
+                                      style: IconButton.styleFrom(
+                                        hoverColor: const Color(
+                                          0xFF02AC3F,
+                                        ).withOpacity(0.08),
+                                        highlightColor: const Color(
+                                          0xFF02AC3F,
+                                        ).withOpacity(0.12),
+                                      ),
                                       icon: Icon(
                                         _obscurePassword
                                             ? Icons.visibility_off_outlined
@@ -413,6 +422,14 @@ class _SignUpScreenState extends State<SignUpScreen>
                                     iconSize: extraShortScreen ? 18.0 : 20.0,
                                     fontSize: extraShortScreen ? 14.0 : 15.0,
                                     suffixIcon: IconButton(
+                                      style: IconButton.styleFrom(
+                                        hoverColor: const Color(
+                                          0xFF02AC3F,
+                                        ).withOpacity(0.08),
+                                        highlightColor: const Color(
+                                          0xFF02AC3F,
+                                        ).withOpacity(0.12),
+                                      ),
                                       icon: Icon(
                                         _obscureConfirm
                                             ? Icons.visibility_off_outlined
@@ -458,6 +475,8 @@ class _SignUpScreenState extends State<SignUpScreen>
                                           backgroundColor: Colors.transparent,
                                           shadowColor: Colors.transparent,
                                           foregroundColor: Colors.white,
+                                          overlayColor: Colors.white
+                                              .withOpacity(0.14),
                                           elevation: 0,
                                           shape: RoundedRectangleBorder(
                                             borderRadius:
@@ -512,16 +531,35 @@ class _SignUpScreenState extends State<SignUpScreen>
                                 color: Color(0xFF757575),
                               ),
                             ),
-                            GestureDetector(
-                              onTap: _isLoading
-                                  ? null
-                                  : () => Navigator.of(context).pop(),
-                              child: const Text(
-                                'Log in',
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  color: Color(0xFF02AC3F),
-                                  fontWeight: FontWeight.w700,
+                            Material(
+                              color: Colors.transparent,
+                              child: InkWell(
+                                onTap: _isLoading
+                                    ? null
+                                    : () => Navigator.of(context).pop(),
+                                borderRadius: BorderRadius.circular(10),
+                                splashColor: const Color(
+                                  0xFF02AC3F,
+                                ).withOpacity(0.14),
+                                highlightColor: const Color(
+                                  0xFF02AC3F,
+                                ).withOpacity(0.10),
+                                hoverColor: const Color(
+                                  0xFF02AC3F,
+                                ).withOpacity(0.08),
+                                child: const Padding(
+                                  padding: EdgeInsets.symmetric(
+                                    horizontal: 6,
+                                    vertical: 4,
+                                  ),
+                                  child: Text(
+                                    'Log in',
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      color: Color(0xFF02AC3F),
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
                                 ),
                               ),
                             ),

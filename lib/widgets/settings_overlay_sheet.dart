@@ -6,12 +6,14 @@ class SettingsOverlaySheet extends StatelessWidget {
   final Widget headerBand;
   final CustomPainter backgroundPainter;
   final Widget child;
+  final bool showBackgroundLineArt;
 
   const SettingsOverlaySheet({
     super.key,
     required this.headerBand,
     required this.backgroundPainter,
     required this.child,
+    this.showBackgroundLineArt = true,
   });
 
   @override
@@ -21,6 +23,7 @@ class SettingsOverlaySheet extends StatelessWidget {
     return Scaffold(
       backgroundColor: const Color(0xFFF4F7F3),
       body: SplashBackground(
+        showLineArt: showBackgroundLineArt,
         child: SafeArea(
           child: Stack(
             children: [

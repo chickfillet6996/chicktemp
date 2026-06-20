@@ -17,7 +17,9 @@ import 'profile_screen.dart';
 import 'reports_screen.dart';
 
 class AnalyticsScreen extends StatefulWidget {
-  const AnalyticsScreen({super.key});
+  final String? initialBatchName;
+
+  const AnalyticsScreen({super.key, this.initialBatchName});
 
   @override
   State<AnalyticsScreen> createState() => _AnalyticsScreenState();
@@ -35,7 +37,13 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
   void initState() {
     super.initState();
     _batches = BatchStore.instance.batches.map((batch) => batch.name).toList();
-    _selectedBatch = _batches.isEmpty ? 'Default Batch' : _batches.first;
+    final initialBatch = widget.initialBatchName;
+    _selectedBatch =
+        initialBatch != null && _batches.contains(initialBatch)
+        ? initialBatch
+        : _batches.isEmpty
+        ? 'Default Batch'
+        : _batches.first;
     TemperatureSettingsStore.instance.loadFor(_selectedBatch);
     _analyticsFuture = _loadAndRecordAnalytics();
     EnvironmentalLogStore.instance.addListener(
@@ -72,6 +80,9 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
   void _goHome() {
     Navigator.of(context).pop();
   }
+
+  BatchItem? get _selectedBatchItem =>
+      BatchStore.instance.findByName(_selectedBatch);
 
   ({String label, Color color}) _temperatureIndicator(
     double temperature,
@@ -145,20 +156,12 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
     final latestFifteenMinuteLog = fifteenMinuteLogs.isEmpty
         ? null
         : fifteenMinuteLogs.last;
-    final temperatureValues = fifteenMinuteLogs
-        .map((log) => log.temperature)
+    final temperatureChartLogs = fifteenMinuteLogs
+        .where((log) => log.temperature > 0)
         .toList();
-    final humidityValues = fifteenMinuteLogs
-        .map((log) => log.humidity)
+    final humidityChartLogs = fifteenMinuteLogs
+        .where((log) => log.humidity > 0)
         .toList();
-    final trendTemperatureValues = temperatureValues
-        .where((value) => value > 0)
-        .toList()
-        .takeLast(12);
-    final trendHumidityValues = humidityValues
-        .where((value) => value > 0)
-        .toList()
-        .takeLast(16);
     final displayedAverageTemperature =
         latestFifteenMinuteLog?.temperature ??
         (telemetry.temperature > 0
@@ -273,9 +276,8 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
       activeSchedules: activeSchedules,
       deviceUsageItems: deviceUsageItems,
       logs: fifteenMinuteLogs,
-      temperatureChartValues: trendTemperatureValues,
-      humidityChartValues: trendHumidityValues,
-      chartLabels: _sampleLogLabels(fifteenMinuteLogs),
+      temperatureChartLogs: temperatureChartLogs.takeLast(12),
+      humidityChartLogs: humidityChartLogs.takeLast(16),
       mortalityReasonCounts: mortalityInsights.reasonCounts,
       mortalityIntervalCounts: mortalityInsights.intervalCounts,
     );
@@ -423,7 +425,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
           child: Column(
             children: [
               Padding(
-                padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+                padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
                 child: _Header(onProfile: () => ProfileScreen.show(context)),
               ),
               const SizedBox(height: 16),
@@ -470,6 +472,34 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                           displayedTemperature,
                           temperatureSettings,
                         );
+                        final selectedBatchItem = _selectedBatchItem;
+                        final sensorNotices = <_SensorNotice>[
+                          if (!isLoading &&
+                              !telemetry.isLive)
+                            _SensorNotice(
+                              text: displayedTemperature > 0 ||
+                                      displayedHumidity > 0
+                                  ? 'Environmental sensors are offline. Showing the last recorded values.'
+                                  : 'Environmental sensors are offline. No recent readings available.',
+                              icon: Icons.sensors_off_outlined,
+                            ),
+                          if (!isLoading &&
+                              !telemetry.isWaterLevelLive)
+                            _SensorNotice(
+                              text: displayedWaterLevel != null
+                                  ? 'Water sensor is offline. Showing the last recorded level.'
+                                  : 'Water sensor is offline. No recent level available.',
+                              icon: Icons.water_drop_outlined,
+                            ),
+                          if (!isLoading &&
+                              !telemetry.isFeederLevelLive)
+                            _SensorNotice(
+                              text: displayedFeederLevel != null
+                                  ? 'Feeder sensor is offline. Showing the last recorded level.'
+                                  : 'Feeder sensor is offline. No recent level available.',
+                              icon: Icons.restaurant_outlined,
+                            ),
+                        ];
 
                         return RefreshIndicator(
                           onRefresh: () async => _refreshLogs(),
@@ -491,13 +521,27 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                                   ),
                                   IconButton(
                                     onPressed: _refreshLogs,
+                                    style: IconButton.styleFrom(
+                                      hoverColor: const Color(0xFF0BB13F)
+                                          .withOpacity(0.08),
+                                      highlightColor: const Color(0xFF0BB13F)
+                                          .withOpacity(0.12),
+                                    ),
                                     icon: const Icon(Icons.refresh_rounded),
                                     color: const Color(0xFF2E7D32),
                                   ),
                                   if (_batches.isNotEmpty) _batchDropdown(),
                                 ],
                               ),
-                              const SizedBox(height: 14),
+                              const SizedBox(height: 10),
+                              if (selectedBatchItem != null) ...[
+                                _BatchCycleStrip(
+                                  batch: selectedBatchItem,
+                                  sensorNotices: sensorNotices,
+                                ),
+                                const SizedBox(height: 14),
+                              ] else
+                                const SizedBox(height: 14),
                               if (snapshot.hasError)
                                 const _StatusBanner(
                                   text:
@@ -515,39 +559,9 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                                       'No environmental logs yet for this batch. Keep the ESP32 online to build analytics history.',
                                   icon: Icons.history_rounded,
                                 ),
-                              if (!isLoading &&
-                                  !telemetry.isLive &&
-                                  (displayedTemperature > 0 ||
-                                      displayedHumidity > 0))
-                                const _StatusBanner(
-                                  text:
-                                      'Environmental sensors are offline. Showing the last recorded values.',
-                                  icon: Icons.sensors_off_outlined,
-                                ),
-                              if (!isLoading &&
-                                  !telemetry.isWaterLevelLive &&
-                                  displayedWaterLevel != null)
-                                const _StatusBanner(
-                                  text:
-                                      'Water sensor is offline. Showing the last recorded level.',
-                                  icon: Icons.water_drop_outlined,
-                                ),
-                              if (!isLoading &&
-                                  !telemetry.isFeederLevelLive &&
-                                  displayedFeederLevel != null)
-                                const _StatusBanner(
-                                  text:
-                                      'Feeder sensor is offline. Showing the last recorded level.',
-                                  icon: Icons.restaurant_outlined,
-                                ),
                               if (snapshot.hasError ||
                                   isLoading ||
-                                  logs.isEmpty ||
-                                  !telemetry.isLive ||
-                                  (!telemetry.isWaterLevelLive &&
-                                      displayedWaterLevel != null) ||
-                                  (!telemetry.isFeederLevelLive &&
-                                      displayedFeederLevel != null))
+                                  logs.isEmpty)
                                 const SizedBox(height: 12),
                               GridView.count(
                                 crossAxisCount: 2,
@@ -637,8 +651,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                                 ),
                                 decoration: _panelDecoration(),
                                 child: _TemperatureChart(
-                                  values: data.temperatureChartValues,
-                                  labels: data.chartLabels,
+                                  logs: data.temperatureChartLogs,
                                   settings: temperatureSettings,
                                 ),
                               ),
@@ -733,7 +746,11 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                 selected: _selectedNavIndex == 2,
                 onTap: () {
                   Navigator.of(context).pushReplacement(
-                    MaterialPageRoute(builder: (_) => const ReportsScreen()),
+                    MaterialPageRoute(
+                      builder: (_) => ReportsScreen(
+                        initialBatchName: _selectedBatch,
+                      ),
+                    ),
                   );
                 },
               ),
@@ -1059,9 +1076,8 @@ class _AnalyticsData {
   final int activeSchedules;
   final List<_DeviceUsageItem> deviceUsageItems;
   final List<EnvironmentalLog> logs;
-  final List<double> temperatureChartValues;
-  final List<double> humidityChartValues;
-  final List<String> chartLabels;
+  final List<EnvironmentalLog> temperatureChartLogs;
+  final List<EnvironmentalLog> humidityChartLogs;
   final Map<String, int> mortalityReasonCounts;
   final List<int> mortalityIntervalCounts;
 
@@ -1085,9 +1101,8 @@ class _AnalyticsData {
     required this.activeSchedules,
     required this.deviceUsageItems,
     required this.logs,
-    required this.temperatureChartValues,
-    required this.humidityChartValues,
-    required this.chartLabels,
+    required this.temperatureChartLogs,
+    required this.humidityChartLogs,
     required this.mortalityReasonCounts,
     required this.mortalityIntervalCounts,
   });
@@ -1141,17 +1156,17 @@ class _Header extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
+      padding: const EdgeInsets.fromLTRB(18, 18, 18, 20),
       decoration: BoxDecoration(
         gradient: const LinearGradient(
-          colors: [Color(0xFF2E7D32), Color(0xFF4CAF50)],
+          colors: [Color(0xFF1F6F2F), Color(0xFF47A34A)],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
         borderRadius: BorderRadius.circular(28),
       ),
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           const Expanded(
             child: Column(
@@ -1177,7 +1192,7 @@ class _Header extends StatelessWidget {
                   'Analytics',
                   style: TextStyle(
                     color: Colors.white,
-                    fontSize: 30,
+                    fontSize: 28,
                     fontWeight: FontWeight.w800,
                     height: 1.0,
                   ),
@@ -1185,9 +1200,11 @@ class _Header extends StatelessWidget {
                 SizedBox(height: 6),
                 Text(
                   'Firebase environmental logs every 15 minutes',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     color: Colors.white70,
-                    fontSize: 13,
+                    fontSize: 12,
                     fontWeight: FontWeight.w500,
                   ),
                 ),
@@ -1197,6 +1214,9 @@ class _Header extends StatelessWidget {
           InkWell(
             onTap: onProfile,
             borderRadius: BorderRadius.circular(14),
+            splashColor: Colors.white.withOpacity(0.18),
+            highlightColor: Colors.white.withOpacity(0.12),
+            hoverColor: Colors.white.withOpacity(0.08),
             child: Container(
               width: 46,
               height: 46,
@@ -1215,6 +1235,275 @@ class _Header extends StatelessWidget {
                   fontSize: 13,
                   fontWeight: FontWeight.w800,
                 ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _BatchCycleStrip extends StatelessWidget {
+  final BatchItem batch;
+  final List<_SensorNotice> sensorNotices;
+
+  const _BatchCycleStrip({
+    required this.batch,
+    required this.sensorNotices,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: double.infinity,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (sensorNotices.isNotEmpty) ...[
+            _SensorNotificationButton(notices: sensorNotices),
+            const SizedBox(width: 8),
+          ],
+          Expanded(
+            flex: 2,
+            child: _BatchCycleChip(
+              icon: Icons.event_available_outlined,
+              label: batch.startedAt,
+              centerContent: true,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            flex: 1,
+            child: _BatchCycleChip(
+              icon: Icons.calendar_today_outlined,
+              label: batch.dayLabel,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _BatchCycleChip extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final bool centerContent;
+
+  const _BatchCycleChip({
+    required this.icon,
+    required this.label,
+    this.centerContent = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.58),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFDCE6EE)),
+      ),
+      child: Row(
+        mainAxisAlignment:
+            centerContent ? MainAxisAlignment.center : MainAxisAlignment.start,
+        children: [
+          Icon(icon, size: 14, color: const Color(0xFF6F7D90)),
+          const SizedBox(width: 6),
+          Flexible(
+            child: Text(
+              label,
+              textAlign: TextAlign.center,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                fontSize: 11,
+                color: Color(0xFF526173),
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SensorNotice {
+  final String text;
+  final IconData icon;
+
+  const _SensorNotice({required this.text, required this.icon});
+}
+
+class _SensorNotificationButton extends StatelessWidget {
+  final List<_SensorNotice> notices;
+
+  const _SensorNotificationButton({required this.notices});
+
+  void _showNotices(BuildContext context) {
+    showDialog<void>(
+      context: context,
+      builder: (context) => Dialog(
+        backgroundColor: Colors.transparent,
+        insetPadding: const EdgeInsets.symmetric(horizontal: 24),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(22),
+          child: SplashBackground(
+            child: _SensorNoticeDialog(notices: notices),
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () => _showNotices(context),
+        borderRadius: BorderRadius.circular(12),
+        splashColor: const Color(0xFF0BB13F).withOpacity(0.14),
+        highlightColor: const Color(0xFF0BB13F).withOpacity(0.10),
+        hoverColor: const Color(0xFF0BB13F).withOpacity(0.08),
+        child: Ink(
+          width: 34,
+          height: 34,
+          decoration: BoxDecoration(
+            color: const Color(0xFFF7F9FB),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: const Color(0xFFE6ECF2)),
+          ),
+          child: Center(
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                const Icon(
+                  Icons.notifications_active_outlined,
+                  color: Color(0xFF2E7D32),
+                  size: 19,
+                ),
+                Positioned(
+                  right: -7,
+                  top: -7,
+                  child: Container(
+                    width: 16,
+                    height: 16,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFE2453D),
+                      borderRadius: BorderRadius.circular(99),
+                      border: Border.all(color: Colors.white, width: 1.5),
+                    ),
+                    child: Text(
+                      '${notices.length}',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 9,
+                        fontWeight: FontWeight.w900,
+                        height: 1,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SensorNoticeDialog extends StatelessWidget {
+  final List<_SensorNotice> notices;
+
+  const _SensorNoticeDialog({required this.notices});
+
+  @override
+  Widget build(BuildContext context) {
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 380),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(18, 14, 18, 20),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Icon(
+                    Icons.notifications_active_outlined,
+                    color: Color(0xFF2E7D32),
+                    size: 22,
+                  ),
+                  const SizedBox(width: 10),
+                  const Expanded(
+                    child: Text(
+                      'Sensor notifications',
+                      style: TextStyle(
+                        color: Color(0xFF1F2D21),
+                        fontSize: 16,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    style: IconButton.styleFrom(
+                      hoverColor: const Color(0xFF0BB13F).withOpacity(0.08),
+                      highlightColor: const Color(0xFF0BB13F).withOpacity(0.12),
+                    ),
+                    icon: const Icon(Icons.close_rounded),
+                    color: const Color(0xFF516154),
+                    tooltip: 'Close',
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              for (final notice in notices) ...[
+                _SensorNoticeTile(notice: notice),
+                const SizedBox(height: 10),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SensorNoticeTile extends StatelessWidget {
+  final _SensorNotice notice;
+
+  const _SensorNoticeTile({required this.notice});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF4FBF6),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFDCEBDD)),
+      ),
+      child: Row(
+        children: [
+          Icon(notice.icon, color: const Color(0xFF2E7D32), size: 20),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              notice.text,
+              style: const TextStyle(
+                color: Color(0xFF405142),
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                height: 1.35,
               ),
             ),
           ),
@@ -1390,26 +1679,30 @@ class _MetricCard extends StatelessWidget {
 }
 
 class _TemperatureChart extends StatelessWidget {
-  final List<double> values;
-  final List<String> labels;
+  final List<EnvironmentalLog> logs;
   final BatchTemperatureSettings settings;
 
   const _TemperatureChart({
-    required this.values,
-    required this.labels,
+    required this.logs,
     required this.settings,
   });
 
   @override
   Widget build(BuildContext context) {
-    final chartValues = values
-        .where((value) => value > 0)
-        .toList()
-        .takeLast(12);
-    final latestValue = chartValues.isEmpty ? 0.0 : chartValues.last;
-    final averageValue = chartValues.isEmpty
+    final points = logs
+        .map(
+          (log) => _TrendPoint(
+            value: log.temperature,
+            recordedAt: log.recordedAt,
+          ),
+        )
+        .toList();
+    final values = points.map((point) => point.value).toList();
+    final latestValue = values.isEmpty ? 0.0 : values.last;
+    final averageValue = values.isEmpty
         ? 0.0
-        : chartValues.reduce((a, b) => a + b) / chartValues.length;
+        : values.reduce((a, b) => a + b) / values.length;
+    final scale = _TrendScale.temperature(values);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1444,10 +1737,14 @@ class _TemperatureChart extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 18),
-        _TemperatureLineChart(
-          values: chartValues,
-          labels: labels,
-          settings: settings,
+        _InteractiveTrendChart(
+          points: points,
+          scale: scale,
+          unit: '\u00B0C',
+          emptyText: 'Waiting for temperature history',
+          minimumTarget: settings.minTemperature,
+          maximumTarget: settings.maxTemperature,
+          targetLabel: 'Configured target',
         ),
       ],
     );
@@ -1467,10 +1764,13 @@ class _HumidityTrendsPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final values = data.humidityChartValues
-        .where((value) => value > 0)
-        .toList()
-        .takeLast(16);
+    final points = data.humidityChartLogs
+        .map(
+          (log) =>
+              _TrendPoint(value: log.humidity, recordedAt: log.recordedAt),
+        )
+        .toList();
+    final values = points.map((point) => point.value).toList();
     final minValue = values.isEmpty ? 0.0 : values.reduce(math.min);
     final maxValue = values.isEmpty ? 0.0 : values.reduce(math.max);
     final latestValue = values.isEmpty ? 0.0 : values.last;
@@ -1513,7 +1813,12 @@ class _HumidityTrendsPanel extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 18),
-        _HumidityBarChart(values: values, labels: data.chartLabels),
+        _InteractiveTrendChart(
+          points: points,
+          scale: _TrendScale.humidity(values),
+          unit: '%',
+          emptyText: 'Waiting for humidity history',
+        ),
       ],
     );
   }
@@ -1730,21 +2035,131 @@ class _DeviceUsageAnalyticsPanelState
   }
 }
 
-class _HumidityBarChart extends StatelessWidget {
-  final List<double> values;
-  final List<String> labels;
+class _TrendPoint {
+  final double value;
+  final DateTime recordedAt;
 
-  const _HumidityBarChart({required this.values, required this.labels});
+  const _TrendPoint({required this.value, required this.recordedAt});
+}
+
+class _TrendScale {
+  final double minimum;
+  final double maximum;
+  final double step;
+
+  const _TrendScale({
+    required this.minimum,
+    required this.maximum,
+    required this.step,
+  });
+
+  List<double> get labels => List<double>.generate(
+    ((maximum - minimum) / step).round() + 1,
+    (index) => maximum - (index * step),
+  );
+
+  factory _TrendScale.temperature(List<double> values) {
+    if (values.isEmpty) {
+      return const _TrendScale(minimum: 28, maximum: 34, step: 1);
+    }
+    final rawMinimum = values.reduce(math.min).floorToDouble();
+    var rawMaximum = values.reduce(math.max).ceilToDouble() + 1;
+    if (rawMaximum - rawMinimum < 3) {
+      rawMaximum = rawMinimum + 3;
+    }
+    final range = rawMaximum - rawMinimum;
+    final step = range <= 5
+        ? 1.0
+        : range <= 10
+        ? 2.0
+        : range <= 20
+        ? 5.0
+        : 10.0;
+    return _TrendScale(
+      minimum: (rawMinimum / step).floorToDouble() * step,
+      maximum: (rawMaximum / step).ceilToDouble() * step,
+      step: step,
+    );
+  }
+
+  factory _TrendScale.humidity(List<double> values) {
+    if (values.isEmpty) {
+      return const _TrendScale(minimum: 60, maximum: 80, step: 5);
+    }
+    var rawMinimum = values.reduce(math.min).floorToDouble() - 1;
+    var rawMaximum = values.reduce(math.max).ceilToDouble() + 1;
+    if (rawMaximum - rawMinimum < 4) {
+      final midpoint = (rawMinimum + rawMaximum) / 2;
+      rawMinimum = midpoint.floorToDouble() - 2;
+      rawMaximum = rawMinimum + 4;
+    }
+    final range = rawMaximum - rawMinimum;
+    final step = range <= 6
+        ? 1.0
+        : range <= 12
+        ? 2.0
+        : range <= 25
+        ? 5.0
+        : 10.0;
+    return _TrendScale(
+      minimum: math
+          .max(0.0, (rawMinimum / step).floorToDouble() * step)
+          .toDouble(),
+      maximum: math
+          .min(100.0, (rawMaximum / step).ceilToDouble() * step)
+          .toDouble(),
+      step: step,
+    );
+  }
+}
+
+class _InteractiveTrendChart extends StatefulWidget {
+  final List<_TrendPoint> points;
+  final _TrendScale scale;
+  final String unit;
+  final String emptyText;
+  final double? minimumTarget;
+  final double? maximumTarget;
+  final String? targetLabel;
+
+  const _InteractiveTrendChart({
+    required this.points,
+    required this.scale,
+    required this.unit,
+    required this.emptyText,
+    this.minimumTarget,
+    this.maximumTarget,
+    this.targetLabel,
+  });
+
+  @override
+  State<_InteractiveTrendChart> createState() =>
+      _InteractiveTrendChartState();
+}
+
+class _InteractiveTrendChartState extends State<_InteractiveTrendChart> {
+  int? _selectedIndex;
+
+  static const Duration _gapThreshold = Duration(minutes: 25);
+
+  @override
+  void didUpdateWidget(covariant _InteractiveTrendChart oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (_selectedIndex != null &&
+        _selectedIndex! >= widget.points.length) {
+      _selectedIndex = null;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    if (values.isEmpty) {
-      return const SizedBox(
+    if (widget.points.isEmpty) {
+      return SizedBox(
         height: 220,
         child: Center(
           child: Text(
-            'Waiting for humidity history',
-            style: TextStyle(
+            widget.emptyText,
+            style: const TextStyle(
               color: Color(0xFF8D98B2),
               fontWeight: FontWeight.w800,
             ),
@@ -1753,58 +2168,13 @@ class _HumidityBarChart extends StatelessWidget {
       );
     }
 
-    final sampleCount = math.min(7, values.length);
-    final sampledValues = List<double>.generate(sampleCount, (index) {
-      if (sampleCount == 1) {
-        return values.first;
-      }
-      final sourceIndex =
-          ((values.length - 1) * (index / (sampleCount - 1))).round();
-      return values[sourceIndex];
-    });
-    final minimumReading = sampledValues.reduce(math.min);
-    final maximumReading = sampledValues.reduce(math.max);
-    var rawMinimumScale = minimumReading.floorToDouble() - 1;
-    var rawMaximumScale = maximumReading.ceilToDouble() + 1;
-    if (rawMaximumScale - rawMinimumScale < 4) {
-      final midpoint = (minimumReading + maximumReading) / 2;
-      rawMinimumScale = midpoint.floorToDouble() - 2;
-      rawMaximumScale = rawMinimumScale + 4;
-    }
-    final rawRange = rawMaximumScale - rawMinimumScale;
-    final scaleStep = rawRange <= 6
-        ? 1.0
-        : rawRange <= 12
-        ? 2.0
-        : rawRange <= 25
-        ? 5.0
-        : 10.0;
-    final minimumScale = math.max(
-      0.0,
-      (rawMinimumScale / scaleStep).floorToDouble() * scaleStep,
-    );
-    final maximumScale = math.min(
-      100.0,
-      (rawMaximumScale / scaleStep).ceilToDouble() * scaleStep,
-    );
-    final yAxisLabels = List<double>.generate(
-      ((maximumScale - minimumScale) / scaleStep).round() + 1,
-      (index) => maximumScale - (index * scaleStep),
-    );
-    final xLabels = labels;
-    const barGradients = [
-      (start: Color(0xFF0B4F1D), end: Color(0xFF2E7D32)),
-      (start: Color(0xFF0D5520), end: Color(0xFF347C38)),
-      (start: Color(0xFF0F5A21), end: Color(0xFF39843D)),
-      (start: Color(0xFF116024), end: Color(0xFF3E8B43)),
-      (start: Color(0xFF126526), end: Color(0xFF429349)),
-      (start: Color(0xFF146B28), end: Color(0xFF479B4E)),
-      (start: Color(0xFF16712B), end: Color(0xFF4CA354)),
-    ];
+    final labels = widget.scale.labels;
+    final gapCount = _countGaps(widget.points);
+    final latest = widget.points.last.recordedAt;
 
     return Container(
-      height: 220,
-      padding: const EdgeInsets.fromLTRB(10, 10, 10, 12),
+      height: 270,
+      padding: const EdgeInsets.fromLTRB(10, 12, 10, 10),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(18),
@@ -1817,20 +2187,16 @@ class _HumidityBarChart extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 Padding(
-                  padding: const EdgeInsets.only(
-                    top: 6,
-                    right: 8,
-                    bottom: 28,
-                  ),
+                  padding: const EdgeInsets.only(right: 8, bottom: 24),
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     crossAxisAlignment: CrossAxisAlignment.end,
-                    children: yAxisLabels
+                    children: labels
                         .map(
                           (value) => Text(
-                            '${value.toStringAsFixed(0)}%',
+                            _axisLabel(value),
                             style: const TextStyle(
-                              fontSize: 11,
+                              fontSize: 10,
                               color: Color(0xFF7B8794),
                               fontWeight: FontWeight.w700,
                             ),
@@ -1845,330 +2211,320 @@ class _HumidityBarChart extends StatelessWidget {
                       Expanded(
                         child: LayoutBuilder(
                           builder: (context, constraints) {
-                            final targetVisible =
-                                70 >= minimumScale && 70 <= maximumScale;
-                            final targetTop =
-                                ((maximumScale - 70) /
-                                    (maximumScale - minimumScale)) *
-                                constraints.maxHeight;
-                            final gridDivisions = math.max(
-                              1,
-                              yAxisLabels.length - 1,
+                            final selectedIndex = _selectedIndex;
+                            final selectedPoint = selectedIndex == null
+                                ? null
+                                : widget.points[selectedIndex];
+                            final selectedOffset = selectedIndex == null
+                                ? null
+                                : _offsetFor(
+                                    selectedIndex,
+                                    constraints.biggest,
+                                  );
+                            final maximumTooltipLeft = math.max(
+                              0.0,
+                              constraints.maxWidth - 124,
+                            );
+                            final maximumTooltipTop = math.max(
+                              0.0,
+                              constraints.maxHeight - 48,
                             );
 
-                            return Stack(
-                              children: [
-                                for (
-                                  var i = 0;
-                                  i < yAxisLabels.length;
-                                  i++
-                                )
-                                  Positioned(
-                                    left: 0,
-                                    right: 0,
-                                    top:
-                                        (constraints.maxHeight /
-                                            gridDivisions) *
-                                        i,
-                                    child: Container(
-                                      height: 1,
-                                      color: const Color(0xFFE6EEF0),
-                                    ),
-                                  ),
-                                if (targetVisible)
-                                  Positioned(
-                                    left: 0,
-                                    right: 0,
-                                    top: targetTop,
-                                    child: CustomPaint(
-                                      size: Size(constraints.maxWidth, 1.6),
-                                      painter: _DashedGuidePainter(),
-                                    ),
-                                  ),
-                                Row(
-                                  crossAxisAlignment: CrossAxisAlignment.end,
+                            return MouseRegion(
+                              cursor: SystemMouseCursors.precise,
+                              onHover: (event) => _selectNearest(
+                                event.localPosition.dx,
+                                constraints.maxWidth,
+                              ),
+                              onExit: (_) {
+                                if (_selectedIndex != null) {
+                                  setState(() => _selectedIndex = null);
+                                }
+                              },
+                              child: GestureDetector(
+                                behavior: HitTestBehavior.opaque,
+                                onTapDown: (details) => _selectNearest(
+                                  details.localPosition.dx,
+                                  constraints.maxWidth,
+                                ),
+                                child: Stack(
+                                  clipBehavior: Clip.none,
                                   children: [
-                                    for (
-                                      var i = 0;
-                                      i < sampledValues.length;
-                                      i++
-                                    ) ...[
-                                      Expanded(
-                                        child: Align(
-                                          alignment: Alignment.bottomCenter,
-                                          child: Container(
-                                            width: 26,
-                                            height:
-                                                (((sampledValues[i].clamp(
-                                                              minimumScale,
-                                                              maximumScale,
-                                                            ) -
-                                                            minimumScale) /
-                                                        (maximumScale -
-                                                            minimumScale)) *
-                                                    (constraints.maxHeight -
-                                                        8)) +
-                                                8,
-                                            decoration: BoxDecoration(
-                                              gradient: LinearGradient(
-                                                colors: [
-                                                  barGradients[i %
-                                                          barGradients.length]
-                                                      .start,
-                                                  barGradients[i %
-                                                          barGradients.length]
-                                                      .end,
-                                                ],
-                                                begin: Alignment.topCenter,
-                                                end: Alignment.bottomCenter,
-                                              ),
-                                              borderRadius:
-                                                  BorderRadius.circular(8),
-                                              boxShadow: [
-                                                BoxShadow(
-                                                  color: const Color(
-                                                    0x332E7D32,
-                                                  ),
-                                                  blurRadius: 8,
-                                                  offset: const Offset(0, 3),
-                                                ),
-                                              ],
-                                            ),
-                                          ),
+                                    Positioned.fill(
+                                      child: CustomPaint(
+                                        painter: _TrendLinePainter(
+                                          points: widget.points,
+                                          scale: widget.scale,
+                                          gapThreshold: _gapThreshold,
+                                          minimumTarget: widget.minimumTarget,
+                                          maximumTarget: widget.maximumTarget,
+                                          selectedIndex: selectedIndex,
                                         ),
                                       ),
-                                      if (i != sampledValues.length - 1)
-                                        const SizedBox(width: 10),
-                                    ],
+                                    ),
+                                    if (selectedPoint != null &&
+                                        selectedOffset != null)
+                                      Positioned(
+                                        left: (selectedOffset.dx - 62)
+                                            .clamp(0.0, maximumTooltipLeft)
+                                            .toDouble(),
+                                        top: (selectedOffset.dy - 54)
+                                            .clamp(0.0, maximumTooltipTop)
+                                            .toDouble(),
+                                        child: _TrendTooltip(
+                                          point: selectedPoint,
+                                          unit: widget.unit,
+                                        ),
+                                      ),
                                   ],
                                 ),
-                              ],
+                              ),
                             );
                           },
                         ),
                       ),
-                      const SizedBox(height: 8),
-                      Row(
-                        children: [
-                          for (var i = 0; i < xLabels.length; i++) ...[
-                            Expanded(
-                              child: Text(
-                                xLabels[i],
-                                textAlign: i == 0
-                                    ? TextAlign.left
-                                    : i == xLabels.length - 1
-                                    ? TextAlign.right
-                                    : TextAlign.center,
-                                style: const TextStyle(
-                                  fontSize: 10,
-                                  color: Color(0xFF8A96A3),
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                            ),
-                            if (i != xLabels.length - 1)
-                              const SizedBox(width: 10),
-                          ],
-                        ],
-                      ),
+                      const SizedBox(height: 6),
+                      _TrendTimeAxis(points: widget.points),
                     ],
                   ),
                 ),
               ],
             ),
           ),
-          const SizedBox(height: 10),
-          const Row(
-            mainAxisAlignment: MainAxisAlignment.center,
+          const SizedBox(height: 8),
+          Wrap(
+            alignment: WrapAlignment.center,
+            spacing: 14,
+            runSpacing: 6,
             children: [
-              _ChartDotLegend(label: 'Actual', color: Color(0xFF2E7D32)),
-              SizedBox(width: 16),
-              _ChartDotLegend(label: 'Target', color: Color(0xFFD3E4F3)),
+              const _ChartDotLegend(
+                label: 'Recorded',
+                color: Color(0xFF2E7D32),
+              ),
+              if (widget.targetLabel != null)
+                _ChartDotLegend(
+                  label: widget.targetLabel!,
+                  color: const Color(0xFFB8D8BE),
+                ),
+              _ChartMetadata(
+                icon: Icons.data_usage_rounded,
+                text:
+                    '${widget.points.length} record${widget.points.length == 1 ? '' : 's'}',
+              ),
+              _ChartMetadata(
+                icon: Icons.schedule_rounded,
+                text: 'Updated ${DateFormat('MMM d, h:mm a').format(latest)}',
+              ),
+              if (gapCount > 0)
+                _ChartMetadata(
+                  icon: Icons.link_off_rounded,
+                  text: '$gapCount data gap${gapCount == 1 ? '' : 's'}',
+                  color: const Color(0xFFB45309),
+                ),
             ],
           ),
         ],
       ),
     );
   }
-}
 
-class _DashedGuidePainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = const Color(0xFFD3E4F3)
-      ..strokeWidth = 1.6
-      ..style = PaintingStyle.stroke;
+  String _axisLabel(double value) {
+    final suffix = widget.unit == '%' ? '%' : '\u00B0';
+    return '${value.toStringAsFixed(0)}$suffix';
+  }
 
-    const dashWidth = 5.0;
-    const dashGap = 4.0;
-    var x = 0.0;
-    while (x < size.width) {
-      final nextX = math.min(x + dashWidth, size.width);
-      canvas.drawLine(Offset(x, 0), Offset(nextX, 0), paint);
-      x += dashWidth + dashGap;
+  void _selectNearest(double localX, double width) {
+    if (widget.points.isEmpty || width <= 0) {
+      return;
+    }
+    var nearestIndex = 0;
+    var nearestDistance = double.infinity;
+    for (var index = 0; index < widget.points.length; index++) {
+      final distance = (_xFor(index, width) - localX).abs();
+      if (distance < nearestDistance) {
+        nearestDistance = distance;
+        nearestIndex = index;
+      }
+    }
+    if (_selectedIndex != nearestIndex) {
+      setState(() => _selectedIndex = nearestIndex);
     }
   }
 
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+  Offset _offsetFor(int index, Size size) {
+    final normalized =
+        ((widget.points[index].value - widget.scale.minimum) /
+                (widget.scale.maximum - widget.scale.minimum))
+            .clamp(0.0, 1.0)
+            .toDouble();
+    return Offset(_xFor(index, size.width), (1 - normalized) * size.height);
+  }
+
+  double _xFor(int index, double width) {
+    if (widget.points.length == 1) {
+      return width / 2;
+    }
+    return width * (index / (widget.points.length - 1));
+  }
+
+  int _countGaps(List<_TrendPoint> points) {
+    var count = 0;
+    for (var index = 1; index < points.length; index++) {
+      if (points[index].recordedAt.difference(points[index - 1].recordedAt) >
+          _gapThreshold) {
+        count++;
+      }
+    }
+    return count;
+  }
 }
 
-class _TemperatureLineChart extends StatelessWidget {
-  final List<double> values;
-  final List<String> labels;
-  final BatchTemperatureSettings settings;
+class _TrendTooltip extends StatelessWidget {
+  final _TrendPoint point;
+  final String unit;
 
-  const _TemperatureLineChart({
-    required this.values,
-    required this.labels,
-    required this.settings,
+  const _TrendTooltip({required this.point, required this.unit});
+
+  @override
+  Widget build(BuildContext context) {
+    final decimals = unit == '%' ? 0 : 1;
+    return IgnorePointer(
+      child: Container(
+        width: 124,
+        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 7),
+        decoration: BoxDecoration(
+          color: const Color(0xFF15361E),
+          borderRadius: BorderRadius.circular(10),
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x33172A1A),
+              blurRadius: 10,
+              offset: Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              '${point.value.toStringAsFixed(decimals)}$unit',
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            Text(
+              DateFormat('MMM d, h:mm a').format(point.recordedAt),
+              style: const TextStyle(
+                color: Colors.white70,
+                fontSize: 9,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _TrendTimeAxis extends StatelessWidget {
+  final List<_TrendPoint> points;
+
+  const _TrendTimeAxis({required this.points});
+
+  @override
+  Widget build(BuildContext context) {
+    final sampleCount = math.min(4, points.length);
+    final indices = <int>{
+      for (var index = 0; index < sampleCount; index++)
+        sampleCount == 1
+            ? 0
+            : ((points.length - 1) * (index / (sampleCount - 1))).round(),
+    }.toList()..sort();
+    final crossesDay = points.first.recordedAt.day != points.last.recordedAt.day;
+
+    return SizedBox(
+      height: 14,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          const labelWidth = 82.0;
+          return Stack(
+            clipBehavior: Clip.none,
+            children: [
+              for (final index in indices)
+                Positioned(
+                  left: _labelLeft(
+                    index,
+                    points.length,
+                    constraints.maxWidth,
+                    labelWidth,
+                  ),
+                  width: labelWidth,
+                  child: Text(
+                    DateFormat(crossesDay ? 'MMM d, h:mm a' : 'h:mm a')
+                        .format(points[index].recordedAt),
+                    textAlign: TextAlign.center,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 9,
+                      color: Color(0xFF8A96A3),
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  double _labelLeft(
+    int index,
+    int pointCount,
+    double width,
+    double labelWidth,
+  ) {
+    if (width <= labelWidth) {
+      return 0;
+    }
+    final ratio = pointCount <= 1 ? 0.5 : index / (pointCount - 1);
+    return ((width * ratio) - (labelWidth / 2))
+        .clamp(0.0, width - labelWidth)
+        .toDouble();
+  }
+}
+
+class _ChartMetadata extends StatelessWidget {
+  final IconData icon;
+  final String text;
+  final Color color;
+
+  const _ChartMetadata({
+    required this.icon,
+    required this.text,
+    this.color = const Color(0xFF64748B),
   });
 
   @override
   Widget build(BuildContext context) {
-    if (values.isEmpty) {
-      return const SizedBox(
-        height: 220,
-        child: Center(
-          child: Text(
-            'Waiting for sensor history',
-            style: TextStyle(
-              color: Color(0xFF8D98B2),
-              fontWeight: FontWeight.w800,
-            ),
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 12, color: color),
+        const SizedBox(width: 4),
+        Text(
+          text,
+          style: TextStyle(
+            color: color,
+            fontSize: 9,
+            fontWeight: FontWeight.w700,
           ),
         ),
-      );
-    }
-
-    final sampleCount = math.min(7, values.length);
-    final sampledValues = List<double>.generate(sampleCount, (index) {
-      if (sampleCount == 1) {
-        return values.first;
-      }
-      final sourceIndex =
-          ((values.length - 1) * (index / (sampleCount - 1))).round();
-      return values[sourceIndex];
-    });
-    final minimumReading = sampledValues.reduce(math.min);
-    final maximumReading = sampledValues.reduce(math.max);
-    final rawMinimumScale = minimumReading.floorToDouble();
-    var rawMaximumScale = maximumReading.ceilToDouble() + 1;
-    if (rawMaximumScale - rawMinimumScale < 3) {
-      rawMaximumScale = rawMinimumScale + 3;
-    }
-    final rawRange = rawMaximumScale - rawMinimumScale;
-    final scaleStep = rawRange <= 5
-        ? 1.0
-        : rawRange <= 10
-        ? 2.0
-        : rawRange <= 20
-        ? 5.0
-        : 10.0;
-    final minimumScale =
-        (rawMinimumScale / scaleStep).floorToDouble() * scaleStep;
-    final maximumScale =
-        (rawMaximumScale / scaleStep).ceilToDouble() * scaleStep;
-    final yAxisLabels = List<double>.generate(
-      ((maximumScale - minimumScale) / scaleStep).round() + 1,
-      (index) => maximumScale - (index * scaleStep),
-    );
-
-    final xLabels = labels;
-
-    return Container(
-      height: 220,
-      padding: const EdgeInsets.fromLTRB(10, 10, 10, 12),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: const Color(0xFFD7E4D8)),
-      ),
-      child: Column(
-        children: [
-          Expanded(
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.only(
-                    top: 6,
-                    right: 8,
-                    bottom: 28,
-                  ),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: yAxisLabels
-                        .map(
-                          (value) => Text(
-                            '${value.toStringAsFixed(0)}\u00B0',
-                            style: const TextStyle(
-                              fontSize: 11,
-                              color: Color(0xFF7B8794),
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        )
-                        .toList(),
-                  ),
-                ),
-                Expanded(
-                  child: Column(
-                    children: [
-                      Expanded(
-                        child: CustomPaint(
-                          painter: _TemperatureLinePainter(
-                            values: sampledValues,
-                            minimumTarget: settings.minTemperature,
-                            maximumTarget: settings.maxTemperature,
-                            minimumScale: minimumScale,
-                            maximumScale: maximumScale,
-                            gridLineCount: yAxisLabels.length,
-                          ),
-                          child: const SizedBox.expand(),
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Row(
-                        children: [
-                          for (var i = 0; i < xLabels.length; i++) ...[
-                            Expanded(
-                              child: Text(
-                                xLabels[i],
-                                textAlign: i == 0
-                                    ? TextAlign.left
-                                    : i == xLabels.length - 1
-                                    ? TextAlign.right
-                                    : TextAlign.center,
-                                style: const TextStyle(
-                                  fontSize: 10,
-                                  color: Color(0xFF8A96A3),
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 10),
-          const Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              _ChartDotLegend(label: 'Actual', color: Color(0xFF2E7D32)),
-              SizedBox(width: 16),
-              _ChartDotLegend(label: 'Target', color: Color(0xFFD3E4F3)),
-            ],
-          ),
-        ],
-      ),
+      ],
     );
   }
 }
@@ -2413,24 +2769,6 @@ String _formatEnvironmentalLogDay(DateTime value) {
   return DateFormat('MMM d, yyyy').format(value);
 }
 
-List<String> _sampleLogLabels(List<EnvironmentalLog> logs) {
-  if (logs.isEmpty) {
-    return const [];
-  }
-
-  final recentLogs = logs.takeLast(12);
-  final sampleCount = math.min(7, recentLogs.length);
-  return List<String>.generate(sampleCount, (index) {
-    if (sampleCount == 1) {
-      return DateFormat('h:mm a').format(recentLogs.first.recordedAt);
-    }
-
-    final sourceIndex =
-        ((recentLogs.length - 1) * (index / (sampleCount - 1))).round();
-    return DateFormat('h:mm a').format(recentLogs[sourceIndex].recordedAt);
-  });
-}
-
 class _ChartDotLegend extends StatelessWidget {
   final String label;
   final Color color;
@@ -2639,21 +2977,21 @@ class _MortalityReasonRow extends StatelessWidget {
   }
 }
 
-class _TemperatureLinePainter extends CustomPainter {
-  final List<double> values;
-  final double minimumTarget;
-  final double maximumTarget;
-  final double minimumScale;
-  final double maximumScale;
-  final int gridLineCount;
+class _TrendLinePainter extends CustomPainter {
+  final List<_TrendPoint> points;
+  final _TrendScale scale;
+  final Duration gapThreshold;
+  final double? minimumTarget;
+  final double? maximumTarget;
+  final int? selectedIndex;
 
-  const _TemperatureLinePainter({
-    required this.values,
+  const _TrendLinePainter({
+    required this.points,
+    required this.scale,
+    required this.gapThreshold,
     required this.minimumTarget,
     required this.maximumTarget,
-    required this.minimumScale,
-    required this.maximumScale,
-    required this.gridLineCount,
+    required this.selectedIndex,
   });
 
   @override
@@ -2674,6 +3012,7 @@ class _TemperatureLinePainter extends CustomPainter {
       ..color = const Color(0xFFD3E4F3)
       ..strokeWidth = 1.6
       ..style = PaintingStyle.stroke;
+    final targetBandPaint = Paint()..color = const Color(0x183FA34D);
     final linePaint = Paint()
       ..shader = const LinearGradient(
         colors: [chartGreenStart, chartGreenEnd],
@@ -2684,6 +3023,11 @@ class _TemperatureLinePainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round;
+    final gapPaint = Paint()
+      ..color = const Color(0xFF7BA884)
+      ..strokeWidth = 2.2
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
     final fillPaint = Paint()
       ..shader = const LinearGradient(
         colors: [Color(0x550B4F1D), Color(0x1A2E7D32), Color(0x002E7D32)],
@@ -2695,15 +3039,19 @@ class _TemperatureLinePainter extends CustomPainter {
       ..color = chartGreenEnd
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.6;
+    final selectedGuidePaint = Paint()
+      ..color = const Color(0x66334155)
+      ..strokeWidth = 1;
 
     double yFor(double value) {
-      final normalized =
-          ((value - minimumScale) / (maximumScale - minimumScale))
+      final normalized = ((value - scale.minimum) /
+              (scale.maximum - scale.minimum))
           .clamp(0.0, 1.0)
           .toDouble();
       return topPad + (1 - normalized) * chartHeight;
     }
 
+    final gridLineCount = scale.labels.length;
     final gridDivisions = math.max(1, gridLineCount - 1);
     for (var i = 0; i < gridLineCount; i++) {
       final y = topPad + (chartHeight / gridDivisions) * i;
@@ -2725,29 +3073,56 @@ class _TemperatureLinePainter extends CustomPainter {
       }
     }
 
-    if (minimumTarget >= minimumScale && minimumTarget <= maximumScale) {
-      drawDashedLine(yFor(minimumTarget));
-    }
-    if (maximumTarget >= minimumScale && maximumTarget <= maximumScale) {
-      drawDashedLine(yFor(maximumTarget));
+    final targetMinimum = minimumTarget;
+    final targetMaximum = maximumTarget;
+    if (targetMinimum != null && targetMaximum != null) {
+      final visibleMinimum = math.max(targetMinimum, scale.minimum);
+      final visibleMaximum = math.min(targetMaximum, scale.maximum);
+      if (visibleMinimum <= visibleMaximum) {
+        canvas.drawRect(
+          Rect.fromLTRB(
+            leftPad,
+            yFor(visibleMaximum),
+            size.width - rightPad,
+            yFor(visibleMinimum),
+          ),
+          targetBandPaint,
+        );
+      }
+      if (targetMinimum >= scale.minimum &&
+          targetMinimum <= scale.maximum) {
+        drawDashedLine(yFor(targetMinimum));
+      }
+      if (targetMaximum >= scale.minimum &&
+          targetMaximum <= scale.maximum) {
+        drawDashedLine(yFor(targetMaximum));
+      }
     }
 
-    Offset pointFor(int index, double value) {
-      final denominator = values.length <= 1 ? 1 : values.length - 1;
-      final x = leftPad + (chartWidth / denominator) * index;
-      return Offset(x, yFor(value));
+    double xFor(int index) {
+      if (points.length == 1) {
+        return leftPad + chartWidth / 2;
+      }
+      return leftPad + chartWidth * (index / (points.length - 1));
     }
 
-    final path = Path();
-    final fillPath = Path();
-    for (var i = 0; i < values.length; i++) {
-      final point = pointFor(i, values[i]);
-      if (i == 0) {
-        path.moveTo(point.dx, point.dy);
-        fillPath.moveTo(point.dx, size.height - bottomPad);
-        fillPath.lineTo(point.dx, point.dy);
-      } else {
-        final previous = pointFor(i - 1, values[i - 1]);
+    Offset pointFor(int index) =>
+        Offset(xFor(index), yFor(points[index].value));
+
+    void drawSegment(int start, int end) {
+      if (end < start) {
+        return;
+      }
+      final path = Path();
+      final fillPath = Path();
+      final firstPoint = pointFor(start);
+      path.moveTo(firstPoint.dx, firstPoint.dy);
+      fillPath.moveTo(firstPoint.dx, size.height - bottomPad);
+      fillPath.lineTo(firstPoint.dx, firstPoint.dy);
+
+      for (var index = start + 1; index <= end; index++) {
+        final previous = pointFor(index - 1);
+        final point = pointFor(index);
         final controlX = previous.dx + ((point.dx - previous.dx) / 2);
         path.cubicTo(
           controlX,
@@ -2766,31 +3141,95 @@ class _TemperatureLinePainter extends CustomPainter {
           point.dy,
         );
       }
+
+      if (end > start) {
+        final lastPoint = pointFor(end);
+        fillPath.lineTo(lastPoint.dx, size.height - bottomPad);
+        fillPath.close();
+        canvas.drawPath(fillPath, fillPaint);
+        canvas.drawPath(path, linePaint);
+      }
     }
 
-    fillPath.lineTo(size.width - rightPad, size.height - bottomPad);
-    fillPath.close();
-
-    canvas.drawPath(fillPath, fillPaint);
-    canvas.drawPath(path, linePaint);
-
-    for (var i = 0; i < values.length; i++) {
-      final point = pointFor(i, values[i]);
-      if (i == 0 || i == values.length - 1 || i == values.length ~/ 2) {
-        canvas.drawCircle(point, 3.6, pointFillPaint);
-        canvas.drawCircle(point, 3.6, pointStrokePaint);
+    var segmentStart = 0;
+    for (var index = 1; index < points.length; index++) {
+      if (points[index].recordedAt.difference(points[index - 1].recordedAt) >
+          gapThreshold) {
+        drawSegment(segmentStart, index - 1);
+        segmentStart = index;
       }
+    }
+    drawSegment(segmentStart, points.length - 1);
+
+    void drawGapConnector(Offset start, Offset end) {
+      const dashLength = 5.0;
+      const dashGap = 4.0;
+      final distance = (end - start).distance;
+      if (distance <= 0) {
+        return;
+      }
+      final direction = (end - start) / distance;
+      var travelled = 0.0;
+      while (travelled < distance) {
+        final segmentEnd = math.min(travelled + dashLength, distance);
+        canvas.drawLine(
+          start + (direction * travelled),
+          start + (direction * segmentEnd),
+          gapPaint,
+        );
+        travelled += dashLength + dashGap;
+      }
+    }
+
+    final gapBoundaryIndices = <int>{};
+    for (var index = 1; index < points.length; index++) {
+      if (points[index].recordedAt.difference(points[index - 1].recordedAt) >
+          gapThreshold) {
+        drawGapConnector(pointFor(index - 1), pointFor(index));
+        gapBoundaryIndices
+          ..add(index - 1)
+          ..add(index);
+      }
+    }
+
+    final markerStep = math.max(1, (points.length / 8).ceil());
+    for (var index = 0; index < points.length; index++) {
+      final shouldDrawMarker =
+          index == 0 ||
+          index == points.length - 1 ||
+          index % markerStep == 0 ||
+          gapBoundaryIndices.contains(index);
+      if (!shouldDrawMarker) {
+        continue;
+      }
+      final point = pointFor(index);
+      canvas.drawCircle(point, 3.2, pointFillPaint);
+      canvas.drawCircle(point, 3.2, pointStrokePaint);
+    }
+
+    final activeIndex = selectedIndex;
+    if (activeIndex != null &&
+        activeIndex >= 0 &&
+        activeIndex < points.length) {
+      final point = pointFor(activeIndex);
+      canvas.drawLine(
+        Offset(point.dx, topPad),
+        Offset(point.dx, size.height - bottomPad),
+        selectedGuidePaint,
+      );
+      canvas.drawCircle(point, 5.2, pointFillPaint);
+      canvas.drawCircle(point, 5.2, pointStrokePaint);
     }
   }
 
   @override
-  bool shouldRepaint(covariant _TemperatureLinePainter oldDelegate) {
-    return oldDelegate.values != values ||
+  bool shouldRepaint(covariant _TrendLinePainter oldDelegate) {
+    return oldDelegate.points != points ||
+        oldDelegate.scale != scale ||
+        oldDelegate.gapThreshold != gapThreshold ||
         oldDelegate.minimumTarget != minimumTarget ||
         oldDelegate.maximumTarget != maximumTarget ||
-        oldDelegate.minimumScale != minimumScale ||
-        oldDelegate.maximumScale != maximumScale ||
-        oldDelegate.gridLineCount != gridLineCount;
+        oldDelegate.selectedIndex != selectedIndex;
   }
 }
 
@@ -3056,29 +3495,36 @@ class _BottomNavItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final color = selected ? const Color(0xFF2E7D32) : const Color(0xFF8E9AAF);
-    return GestureDetector(
-      onTap: onTap,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: selected ? const Color(0xFFE8F6EA) : Colors.transparent,
-              borderRadius: BorderRadius.circular(16),
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(16),
+        splashColor: const Color(0xFF0BB13F).withOpacity(0.14),
+        highlightColor: const Color(0xFF0BB13F).withOpacity(0.10),
+        hoverColor: const Color(0xFF0BB13F).withOpacity(0.08),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: selected ? const Color(0xFFE8F6EA) : Colors.transparent,
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Icon(icon, color: color, size: 26),
             ),
-            child: Icon(icon, color: color, size: 26),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            label,
-            style: TextStyle(
-              color: color,
-              fontSize: 11,
-              fontWeight: FontWeight.w700,
+            const SizedBox(height: 4),
+            Text(
+              label,
+              style: TextStyle(
+                color: color,
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../models/account_session_reset.dart';
 import '../models/auth_store.dart';
 import '../models/batch_store.dart';
 import '../widgets/auth_animated_logo_header.dart';
@@ -60,6 +61,10 @@ class _LoginScreenState extends State<LoginScreen>
       _showMessage('Enter your email and password.');
       return;
     }
+    if (!AuthStore.isValidGmailAddress(email)) {
+      _showMessage(AuthStore.gmailAddressMessage);
+      return;
+    }
 
     setState(() => _isLoading = true);
     try {
@@ -77,11 +82,12 @@ class _LoginScreenState extends State<LoginScreen>
         return;
       }
 
+      resetAccountScopedStores();
       await _persistRememberedLogin(email);
       try {
         await BatchStore.instance.loadForCurrentUser();
       } on Object {
-        BatchStore.instance.clear();
+        resetAccountScopedStores();
       }
       if (!mounted) {
         return;
@@ -391,6 +397,14 @@ class _LoginScreenState extends State<LoginScreen>
                                     prefixIcon: Icons.lock_outline_rounded,
                                     obscureText: _obscurePassword,
                                     suffixIcon: IconButton(
+                                      style: IconButton.styleFrom(
+                                        hoverColor: const Color(
+                                          0xFF02AC3F,
+                                        ).withOpacity(0.08),
+                                        highlightColor: const Color(
+                                          0xFF02AC3F,
+                                        ).withOpacity(0.12),
+                                      ),
                                       icon: Icon(
                                         _obscurePassword
                                             ? Icons.visibility_off_outlined
@@ -443,6 +457,9 @@ class _LoginScreenState extends State<LoginScreen>
                                           foregroundColor: const Color(
                                             0xFF02AC3F,
                                           ),
+                                          overlayColor: const Color(
+                                            0xFF02AC3F,
+                                          ).withOpacity(0.10),
                                           textStyle: const TextStyle(
                                             fontSize: 13,
                                             fontWeight: FontWeight.w600,
@@ -483,6 +500,8 @@ class _LoginScreenState extends State<LoginScreen>
                                           backgroundColor: Colors.transparent,
                                           shadowColor: Colors.transparent,
                                           foregroundColor: Colors.white,
+                                          overlayColor: Colors.white
+                                              .withOpacity(0.14),
                                           elevation: 0,
                                           shape: RoundedRectangleBorder(
                                             borderRadius:
@@ -537,23 +556,43 @@ class _LoginScreenState extends State<LoginScreen>
                                 color: Color(0xFF757575),
                               ),
                             ),
-                            GestureDetector(
-                              onTap: _isLoading
-                                  ? null
-                                  : () {
-                                      Navigator.push(
-                                        context,
-                                        MaterialPageRoute(
-                                          builder: (_) => const SignUpScreen(),
-                                        ),
-                                      );
-                                    },
-                              child: const Text(
-                                'Sign up',
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  color: Color(0xFF02AC3F),
-                                  fontWeight: FontWeight.w700,
+                            Material(
+                              color: Colors.transparent,
+                              child: InkWell(
+                                onTap: _isLoading
+                                    ? null
+                                    : () {
+                                        Navigator.push(
+                                          context,
+                                          MaterialPageRoute(
+                                            builder: (_) =>
+                                                const SignUpScreen(),
+                                          ),
+                                        );
+                                      },
+                                borderRadius: BorderRadius.circular(10),
+                                splashColor: const Color(
+                                  0xFF02AC3F,
+                                ).withOpacity(0.14),
+                                highlightColor: const Color(
+                                  0xFF02AC3F,
+                                ).withOpacity(0.10),
+                                hoverColor: const Color(
+                                  0xFF02AC3F,
+                                ).withOpacity(0.08),
+                                child: const Padding(
+                                  padding: EdgeInsets.symmetric(
+                                    horizontal: 6,
+                                    vertical: 4,
+                                  ),
+                                  child: Text(
+                                    'Sign up',
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      color: Color(0xFF02AC3F),
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
                                 ),
                               ),
                             ),

@@ -33,7 +33,9 @@ enum _ReportTemplate {
 enum _ExportRange { day, week }
 
 class ReportsScreen extends StatefulWidget {
-  const ReportsScreen({super.key});
+  final String? initialBatchName;
+
+  const ReportsScreen({super.key, this.initialBatchName});
 
   @override
   State<ReportsScreen> createState() => _ReportsScreenState();
@@ -75,7 +77,13 @@ class _ReportsScreenState extends State<ReportsScreen> {
   @override
   void initState() {
     super.initState();
-    _selectedBatch = _batches.isNotEmpty ? _batches.first : 'Broiler Batch 1';
+    final initialBatch = widget.initialBatchName;
+    _selectedBatch =
+        initialBatch != null && _batches.contains(initialBatch)
+        ? initialBatch
+        : _batches.isNotEmpty
+        ? _batches.first
+        : 'Broiler Batch 1';
     _loadBatchData();
   }
 
@@ -1299,7 +1307,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
             lines: [
               'Batch status: ${batch?.status ?? 'ACTIVE'}',
               'Cycle progress: ${batch?.dayLabel ?? 'Day 1 / 45'}',
-              'Started: ${batch?.startedAt ?? 'Not set'}',
+              batch?.startedAt ?? 'Started: Not set',
             ],
           ),
         ],
@@ -1335,7 +1343,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
           lines: [
             'Batch status: ${batch?.status ?? 'ACTIVE'}',
             'Cycle progress: ${batch?.dayLabel ?? 'Day 1 / 45'}',
-            'Started: ${batch?.startedAt ?? 'Not set'}',
+            batch?.startedAt ?? 'Started: Not set',
           ],
         ),
       ],
@@ -1680,7 +1688,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
             'Batch: ${batch?.name ?? _selectedBatch}',
             'Status: ${batch?.status ?? 'ACTIVE'}',
             'Progress: ${batch?.dayLabel ?? 'Day 1 / 45'}',
-            'Started: ${batch?.startedAt ?? 'Not set'}',
+            batch?.startedAt ?? 'Started: Not set',
           ],
         ),
         _ReportPreviewSection(
@@ -1714,7 +1722,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
             'Batch: ${batch?.name ?? _selectedBatch}',
             'Status: ${batch?.status ?? 'ACTIVE'}',
             'Progress: ${batch?.dayLabel ?? 'Day 1 / 45'}',
-            'Started: ${batch?.startedAt ?? 'Not set'}',
+            batch?.startedAt ?? 'Started: Not set',
           ],
         ),
         _ReportPreviewSection(
@@ -1814,20 +1822,20 @@ class _ReportsScreenState extends State<ReportsScreen> {
               child: Column(
                 children: [
                   Padding(
-                    padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+                    padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
                     child: Container(
                       width: double.infinity,
-                      padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
+                      padding: const EdgeInsets.fromLTRB(18, 18, 18, 20),
                       decoration: BoxDecoration(
                         gradient: const LinearGradient(
-                          colors: [Color(0xFF2E7D32), Color(0xFF4CAF50)],
+                          colors: [Color(0xFF1F6F2F), Color(0xFF47A34A)],
                           begin: Alignment.topLeft,
                           end: Alignment.bottomRight,
                         ),
                         borderRadius: BorderRadius.circular(28),
                       ),
                       child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+                        crossAxisAlignment: CrossAxisAlignment.center,
                         children: [
                           const Expanded(
                             child: Column(
@@ -1857,7 +1865,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
                                   'Reports',
                                   style: TextStyle(
                                     color: Colors.white,
-                                    fontSize: 30,
+                                    fontSize: 28,
                                     fontWeight: FontWeight.w800,
                                     height: 1.0,
                                   ),
@@ -1877,6 +1885,9 @@ class _ReportsScreenState extends State<ReportsScreen> {
                           InkWell(
                             onTap: () => ProfileScreen.show(context),
                             borderRadius: BorderRadius.circular(14),
+                            splashColor: Colors.white.withOpacity(0.18),
+                            highlightColor: Colors.white.withOpacity(0.12),
+                            hoverColor: Colors.white.withOpacity(0.08),
                             child: Container(
                               width: 46,
                               height: 46,
@@ -1951,6 +1962,9 @@ class _ReportsScreenState extends State<ReportsScreen> {
                                     value: _batches.contains(_selectedBatch)
                                         ? _selectedBatch
                                         : null,
+                                    focusColor: const Color(
+                                      0xFF0BB13F,
+                                    ).withOpacity(0.08),
                                     borderRadius: BorderRadius.circular(16),
                                     icon: const Icon(
                                       Icons.keyboard_arrow_down_rounded,
@@ -2184,7 +2198,9 @@ class _ReportsScreenState extends State<ReportsScreen> {
                     onTap: () {
                       Navigator.of(context).pushReplacement(
                         MaterialPageRoute(
-                          builder: (_) => const AnalyticsScreen(),
+                          builder: (_) => AnalyticsScreen(
+                            initialBatchName: _selectedBatch,
+                          ),
                         ),
                       );
                     },
@@ -2447,8 +2463,10 @@ class _ExpandableReportCard extends StatelessWidget {
       child: InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(18),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 180),
+        splashColor: definition.color.withOpacity(0.16),
+        highlightColor: definition.color.withOpacity(0.10),
+        hoverColor: definition.color.withOpacity(0.08),
+        child: Ink(
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
             color: expanded
@@ -2716,6 +2734,7 @@ class _ExportRangeDropdown extends StatelessWidget {
           value: value,
           icon: Icon(Icons.keyboard_arrow_down_rounded, size: 18, color: color),
           borderRadius: BorderRadius.circular(12),
+          focusColor: color.withOpacity(0.08),
           style: TextStyle(
             fontSize: 11,
             fontWeight: FontWeight.w700,
@@ -2755,7 +2774,10 @@ class _MiniActionButton extends StatelessWidget {
       child: InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(10),
-        child: Container(
+        splashColor: color.withOpacity(0.16),
+        highlightColor: color.withOpacity(0.10),
+        hoverColor: color.withOpacity(0.08),
+        child: Ink(
           width: 34,
           height: 34,
           decoration: BoxDecoration(
@@ -2854,10 +2876,15 @@ class _ComposerCard extends StatelessWidget {
             controller: dateController,
             readOnly: true,
             onTap: onPickDate,
+            mouseCursor: SystemMouseCursors.click,
             decoration: fieldDecoration(
               'dd/mm/yyyy',
               suffixIcon: IconButton(
                 onPressed: onPickDate,
+                style: IconButton.styleFrom(
+                  hoverColor: accentColor.withOpacity(0.08),
+                  highlightColor: accentColor.withOpacity(0.12),
+                ),
                 icon: const Icon(Icons.calendar_month_outlined, size: 18),
                 color: const Color(0xFF2F3748),
               ),
@@ -2925,8 +2952,10 @@ class _SegmentButton extends StatelessWidget {
         child: InkWell(
           onTap: onTap,
           borderRadius: BorderRadius.circular(14),
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 180),
+          splashColor: const Color(0xFF0BB13F).withOpacity(0.14),
+          highlightColor: const Color(0xFF0BB13F).withOpacity(0.10),
+          hoverColor: const Color(0xFF0BB13F).withOpacity(0.08),
+          child: Ink(
             padding: const EdgeInsets.symmetric(vertical: 10),
             decoration: BoxDecoration(
               color: selected ? const Color(0xFF1E8E3E) : Colors.transparent,
@@ -2980,7 +3009,10 @@ class _ActionButton extends StatelessWidget {
       child: InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(10),
-        child: Container(
+        splashColor: color.withOpacity(0.16),
+        highlightColor: color.withOpacity(0.10),
+        hoverColor: color.withOpacity(0.08),
+        child: Ink(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
           decoration: BoxDecoration(
             color: Colors.white,
@@ -3031,29 +3063,36 @@ class _BottomNavItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final color = selected ? const Color(0xFF2E7D32) : const Color(0xFF8E9AAF);
-    return GestureDetector(
-      onTap: onTap,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: selected ? const Color(0xFFE8F6EA) : Colors.transparent,
-              borderRadius: BorderRadius.circular(16),
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(16),
+        splashColor: const Color(0xFF0BB13F).withOpacity(0.14),
+        highlightColor: const Color(0xFF0BB13F).withOpacity(0.10),
+        hoverColor: const Color(0xFF0BB13F).withOpacity(0.08),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: selected ? const Color(0xFFE8F6EA) : Colors.transparent,
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Icon(icon, color: color, size: 26),
             ),
-            child: Icon(icon, color: color, size: 26),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            label,
-            style: TextStyle(
-              color: color,
-              fontSize: 11,
-              fontWeight: FontWeight.w700,
+            const SizedBox(height: 4),
+            Text(
+              label,
+              style: TextStyle(
+                color: color,
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

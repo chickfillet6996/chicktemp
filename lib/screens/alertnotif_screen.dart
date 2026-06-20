@@ -7,6 +7,7 @@ import '../models/auth_store.dart';
 import '../models/batch_store.dart';
 import '../models/monitoring_store.dart';
 import '../models/temperature_settings_store.dart';
+import '../widgets/settings_back_card.dart';
 import '../widgets/settings_overlay_sheet.dart';
 import '../widgets/user_avatar_content.dart';
 
@@ -84,19 +85,7 @@ class _AlertNotificationsScreenState extends State<AlertNotificationsScreen> {
                                                     context,
                                                   ).pop(),
                                                 ),
-                                                const Divider(
-                                                  height: 30,
-                                                  color: Color(0xFFE7EBE6),
-                                                ),
-                                                const Text(
-                                                  'Alerts & Notifications',
-                                                  style: TextStyle(
-                                                    color: Color(0xFF1E293B),
-                                                    fontSize: 18,
-                                                    fontWeight: FontWeight.w800,
-                                                  ),
-                                                ),
-                                                const SizedBox(height: 6),
+                                                const SizedBox(height: 30),
                                                 Text(
                                                   unreadCount == 0
                                                       ? 'Everything is caught up.'
@@ -376,35 +365,7 @@ class _TopBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [
-        InkWell(
-          onTap: onBack,
-          borderRadius: BorderRadius.circular(16),
-          child: const Padding(
-            padding: EdgeInsets.symmetric(vertical: 6),
-            child: Row(
-              children: [
-                Icon(
-                  Icons.arrow_back_rounded,
-                  color: Color(0xFF41536D),
-                  size: 20,
-                ),
-                SizedBox(width: 6),
-                Text(
-                  'Back',
-                  style: TextStyle(
-                    color: Color(0xFF41536D),
-                    fontSize: 14,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ],
-    );
+    return SettingsBackCard(onTap: onBack);
   }
 }
 
@@ -771,7 +732,7 @@ class _HeaderBand extends StatelessWidget {
           borderRadius: BorderRadius.circular(28),
         ),
         child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
             const Expanded(
               child: Column(

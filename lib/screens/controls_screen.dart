@@ -578,7 +578,7 @@ class _ControlsScreenState extends State<ControlsScreen> {
                     borderRadius: BorderRadius.circular(28),
                   ),
                   child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                    crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
                       const Expanded(
                         child: Column(
@@ -624,6 +624,9 @@ class _ControlsScreenState extends State<ControlsScreen> {
                       InkWell(
                         onTap: () => ProfileScreen.show(context),
                         borderRadius: BorderRadius.circular(14),
+                        splashColor: Colors.white.withOpacity(0.18),
+                        highlightColor: Colors.white.withOpacity(0.12),
+                        hoverColor: Colors.white.withOpacity(0.08),
                         child: Container(
                           width: 46,
                           height: 46,
@@ -809,6 +812,9 @@ class _ControlsScreenState extends State<ControlsScreen> {
                   waterLevelPercent: telemetry.waterLevelPercent,
                   waterDistanceCm: telemetry.waterDistanceCm,
                   waterLevelLive: telemetry.isWaterLevelLive,
+                  hideDefaultsWhenEmpty:
+                      AuthStore.instance.currentUser?.startsWithEmptyControls ??
+                      false,
                   onTapHeader: _toggleWater,
                   onAddDevice: _openAddWaterDeviceSheet,
                   onAddGlobalSchedule: () => _openAddWaterScheduleSheet(),
@@ -912,7 +918,11 @@ class _ControlsScreenState extends State<ControlsScreen> {
                 selected: _selectedNavIndex == 1,
                 onTap: () {
                   Navigator.of(context).pushReplacement(
-                    MaterialPageRoute(builder: (_) => const AnalyticsScreen()),
+                    MaterialPageRoute(
+                      builder: (_) => AnalyticsScreen(
+                        initialBatchName: widget.batchName,
+                      ),
+                    ),
                   );
                 },
               ),
@@ -922,7 +932,11 @@ class _ControlsScreenState extends State<ControlsScreen> {
                 selected: _selectedNavIndex == 2,
                 onTap: () {
                   Navigator.of(context).pushReplacement(
-                    MaterialPageRoute(builder: (_) => const ReportsScreen()),
+                    MaterialPageRoute(
+                      builder: (_) => ReportsScreen(
+                        initialBatchName: widget.batchName,
+                      ),
+                    ),
                   );
                 },
               ),
@@ -973,6 +987,9 @@ class _TemperatureDropdownCard extends StatelessWidget {
           InkWell(
             onTap: onTapHeader,
             borderRadius: BorderRadius.circular(24),
+            splashColor: const Color(0xFF0BB13F).withOpacity(0.14),
+            highlightColor: const Color(0xFF0BB13F).withOpacity(0.10),
+            hoverColor: const Color(0xFF0BB13F).withOpacity(0.08),
             child: Padding(
               padding: const EdgeInsets.all(16),
               child: Row(
@@ -1161,6 +1178,9 @@ class _FeederDropdownCard extends StatelessWidget {
           InkWell(
             onTap: onTapHeader,
             borderRadius: BorderRadius.circular(24),
+            splashColor: const Color(0xFF0BB13F).withOpacity(0.14),
+            highlightColor: const Color(0xFF0BB13F).withOpacity(0.10),
+            hoverColor: const Color(0xFF0BB13F).withOpacity(0.08),
             child: Padding(
               padding: const EdgeInsets.all(16),
               child: Row(
@@ -1552,6 +1572,10 @@ class _FeederDeviceCard extends StatelessWidget {
           ),
           IconButton(
             onPressed: () => onDeleteDevice(index),
+            style: IconButton.styleFrom(
+              hoverColor: const Color(0xFFE53935).withOpacity(0.08),
+              highlightColor: const Color(0xFFE53935).withOpacity(0.12),
+            ),
             icon: const Icon(Icons.delete_outline, size: 18, color: Color(0xFFD0D7E5)),
             visualDensity: VisualDensity.compact,
             tooltip: 'Delete device',
@@ -1675,6 +1699,9 @@ class _AddFeederDeviceSheetState extends State<_AddFeederDeviceSheet> {
                     InkWell(
                       onTap: () => Navigator.of(context).pop(),
                       borderRadius: BorderRadius.circular(999),
+                      splashColor: const Color(0xFF0BB13F).withOpacity(0.14),
+                      highlightColor: const Color(0xFF0BB13F).withOpacity(0.10),
+                      hoverColor: const Color(0xFF0BB13F).withOpacity(0.08),
                       child: Container(
                         width: 34,
                         height: 34,
@@ -1808,6 +1835,9 @@ class _AddFeederScheduleSheetState extends State<_AddFeederScheduleSheet> {
                 InkWell(
                   onTap: () => Navigator.of(context).pop(),
                   borderRadius: BorderRadius.circular(999),
+                  splashColor: const Color(0xFF0BB13F).withOpacity(0.14),
+                  highlightColor: const Color(0xFF0BB13F).withOpacity(0.10),
+                  hoverColor: const Color(0xFF0BB13F).withOpacity(0.08),
                   child: Container(
                     width: 34,
                     height: 34,
@@ -1901,7 +1931,10 @@ class _TimeField extends StatelessWidget {
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(14),
-      child: Container(
+      splashColor: const Color(0xFF0BB13F).withOpacity(0.14),
+      highlightColor: const Color(0xFF0BB13F).withOpacity(0.10),
+      hoverColor: const Color(0xFF0BB13F).withOpacity(0.08),
+      child: Ink(
         height: 44,
         padding: const EdgeInsets.symmetric(horizontal: 14),
         decoration: BoxDecoration(
@@ -1941,21 +1974,28 @@ class _PillButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        height: 40,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: selected ? const Color(0xFFE8F6EA) : Colors.white,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: selected ? const Color(0xFFA8E7B8) : const Color(0xFFDCE4EE)),
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            color: selected ? const Color(0xFF0B8F39) : const Color(0xFF8A96AC),
-            fontWeight: FontWeight.w800,
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(14),
+        splashColor: const Color(0xFF0BB13F).withOpacity(0.14),
+        highlightColor: const Color(0xFF0BB13F).withOpacity(0.10),
+        hoverColor: const Color(0xFF0BB13F).withOpacity(0.08),
+        child: Container(
+          height: 40,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: selected ? const Color(0xFFE8F6EA) : Colors.white,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: selected ? const Color(0xFFA8E7B8) : const Color(0xFFDCE4EE)),
+          ),
+          child: Text(
+            label,
+            style: TextStyle(
+              color: selected ? const Color(0xFF0B8F39) : const Color(0xFF8A96AC),
+              fontWeight: FontWeight.w800,
+            ),
           ),
         ),
       ),
@@ -2056,6 +2096,9 @@ class _VentilationDropdownCard extends StatelessWidget {
           InkWell(
             onTap: onTapHeader,
             borderRadius: BorderRadius.circular(24),
+            splashColor: const Color(0xFF0BB13F).withOpacity(0.14),
+            highlightColor: const Color(0xFF0BB13F).withOpacity(0.10),
+            hoverColor: const Color(0xFF0BB13F).withOpacity(0.08),
             child: Padding(
               padding: const EdgeInsets.all(16),
               child: Row(
@@ -2240,6 +2283,10 @@ class _VentilationDropdownCard extends StatelessWidget {
             ),
             IconButton(
               onPressed: () => onDeleteDevice(index),
+              style: IconButton.styleFrom(
+                hoverColor: const Color(0xFFE53935).withOpacity(0.08),
+                highlightColor: const Color(0xFFE53935).withOpacity(0.12),
+              ),
               icon: const Icon(Icons.delete_outline, size: 18, color: Color(0xFFB7C0CD)),
               visualDensity: VisualDensity.compact,
               padding: EdgeInsets.zero,
@@ -2429,34 +2476,41 @@ class _SpeedButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 180),
-        height: 44,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: selected ? Colors.white : const Color(0xFFF8FBFA),
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-            color: selected ? const Color(0xFF90D6A4) : const Color(0xFFE3E9E4),
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(14),
+        splashColor: const Color(0xFF0BB13F).withOpacity(0.14),
+        highlightColor: const Color(0xFF0BB13F).withOpacity(0.10),
+        hoverColor: const Color(0xFF0BB13F).withOpacity(0.08),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          height: 44,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: selected ? Colors.white : const Color(0xFFF8FBFA),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: selected ? const Color(0xFF90D6A4) : const Color(0xFFE3E9E4),
+            ),
+            boxShadow: selected
+                ? [
+                    BoxShadow(
+                      color: const Color(0xFF0BB13F).withOpacity(0.08),
+                      blurRadius: 10,
+                      offset: const Offset(0, 4),
+                    ),
+                  ]
+                : null,
           ),
-          boxShadow: selected
-              ? [
-                  BoxShadow(
-                    color: const Color(0xFF0BB13F).withOpacity(0.08),
-                    blurRadius: 10,
-                    offset: const Offset(0, 4),
-                  ),
-                ]
-              : null,
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            color: selected ? const Color(0xFF0B8F39) : const Color(0xFFB1BAC7),
-            fontSize: 16,
-            fontWeight: FontWeight.w800,
+          child: Text(
+            label,
+            style: TextStyle(
+              color: selected ? const Color(0xFF0B8F39) : const Color(0xFFB1BAC7),
+              fontSize: 16,
+              fontWeight: FontWeight.w800,
+            ),
           ),
         ),
       ),
@@ -2685,31 +2739,38 @@ class _BottomNavItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final color = selected ? const Color(0xFF2E7D32) : const Color(0xFF8E9AAF);
-    return GestureDetector(
-      onTap: onTap,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: selected
-                  ? const Color(0xFFE8F6EA).withOpacity(0.7)
-                  : Colors.transparent,
-              borderRadius: BorderRadius.circular(16),
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(16),
+        splashColor: const Color(0xFF0BB13F).withOpacity(0.14),
+        highlightColor: const Color(0xFF0BB13F).withOpacity(0.10),
+        hoverColor: const Color(0xFF0BB13F).withOpacity(0.08),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: selected
+                    ? const Color(0xFFE8F6EA).withOpacity(0.7)
+                    : Colors.transparent,
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Icon(icon, color: color, size: 26),
             ),
-            child: Icon(icon, color: color, size: 26),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            label,
-            style: TextStyle(
-              color: color,
-              fontSize: 11,
-              fontWeight: FontWeight.w700,
+            const SizedBox(height: 4),
+            Text(
+              label,
+              style: TextStyle(
+                color: color,
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

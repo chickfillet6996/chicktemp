@@ -219,7 +219,7 @@ class BatchStore extends ChangeNotifier {
 
   void add(BatchItem batch) {
     final savedBatch = batch.copyWith(id: batch.stableId).withElapsedDay();
-    _batches.insert(0, savedBatch);
+    _batches.add(savedBatch);
     notifyListeners();
     unawaited(_saveLocalCache());
     _saveBatch(savedBatch);
