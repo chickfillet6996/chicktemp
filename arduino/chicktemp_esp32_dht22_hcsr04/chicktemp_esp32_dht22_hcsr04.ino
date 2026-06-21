@@ -21,6 +21,15 @@ const float WATER_TANK_FULL_DISTANCE_CM = 3.0;
 const float FEEDER_EMPTY_DISTANCE_CM = 30.0;
 const float FEEDER_FULL_DISTANCE_CM = 3.0;
 
+// Relay K1 / IN1 controls the 12V water pump through a separate 12V supply.
+// Most 5V relay modules are active LOW. Change to false if yours works backward.
+#define WATER_PUMP_RELAY_PIN 26
+#define WATER_PUMP_RELAY_ACTIVE_LOW true
+
+// Relay K2 / IN2 controls the light bulb.
+#define LIGHT_BULB_RELAY_PIN 27
+#define LIGHT_BULB_RELAY_ACTIVE_LOW true
+
 const char* WIFI_SSID = "ZTE_2.4G_uDF6tp";
 const char* WIFI_PASSWORD = "Kurtyu082541";
 
@@ -31,6 +40,7 @@ const char* FIREBASE_BATCH_ID = "broiler_batch_1";
 const unsigned long FIREBASE_UPLOAD_INTERVAL_MS = 5000;
 const unsigned long FIREBASE_ENVIRONMENTAL_LOG_INTERVAL_MS = 15UL * 60UL * 1000UL;
 const unsigned long FIREBASE_ENVIRONMENTAL_LOG_RETRY_MS = 10000;
+const unsigned long FIREBASE_CONTROL_POLL_INTERVAL_MS = 2000;
 const unsigned long WIFI_RECONNECT_INTERVAL_MS = 30000;
 
 const char* AP_SSID = "ChickTemp-ESP32";
@@ -52,8 +62,11 @@ unsigned long lastSensorReadMs = 0;
 unsigned long lastFirebaseUploadMs = 0;
 unsigned long lastFirebaseLogMs = 0;
 unsigned long lastFirebaseLogAttemptMs = 0;
+unsigned long lastFirebaseControlPollMs = 0;
 unsigned long lastWiFiReconnectAttemptMs = 0;
 bool hasUploadedEnvironmentalLog = false;
+bool waterPumpEnabled = false;
+bool lightBulbEnabled = false;
 double temperatureLogSum = 0;
 double humidityLogSum = 0;
 unsigned long environmentalLogSampleCount = 0;
@@ -247,6 +260,12 @@ void handleSensor() {
   payload += "\"feeder_distance_cm\":";
   payload += String(isnan(lastFeederDistanceCm) ? 0 : lastFeederDistanceCm, 1);
   payload += ",";
+  payload += "\"water_pump_enabled\":";
+  payload += waterPumpEnabled ? "true" : "false";
+  payload += ",";
+  payload += "\"light_bulb_enabled\":";
+  payload += lightBulbEnabled ? "true" : "false";
+  payload += ",";
   payload += "\"device\":\"esp32-dht22-hcsr04\"";
   payload += ",";
   payload += "\"local_ip\":\"";
@@ -292,6 +311,94 @@ String firebaseEnvironmentalLogsUrl() {
     baseUrl.remove(baseUrl.length() - 1);
   }
   return baseUrl + FIREBASE_ENVIRONMENTAL_LOGS_PATH;
+}
+
+String firebaseWaterPumpControlUrl() {
+  String baseUrl = FIREBASE_DATABASE_URL;
+  if (baseUrl.endsWith("/")) {
+    baseUrl.remove(baseUrl.length() - 1);
+  }
+  return baseUrl + "/controls/" + FIREBASE_BATCH_ID + "/water_pump.json";
+}
+
+String firebaseLightBulbControlUrl() {
+  String baseUrl = FIREBASE_DATABASE_URL;
+  if (baseUrl.endsWith("/")) {
+    baseUrl.remove(baseUrl.length() - 1);
+  }
+  return baseUrl + "/controls/" + FIREBASE_BATCH_ID + "/light_bulb.json";
+}
+
+void setWaterPumpRelay(bool enabled) {
+  waterPumpEnabled = enabled;
+  const int activeLevel = WATER_PUMP_RELAY_ACTIVE_LOW ? LOW : HIGH;
+  const int inactiveLevel = WATER_PUMP_RELAY_ACTIVE_LOW ? HIGH : LOW;
+  digitalWrite(WATER_PUMP_RELAY_PIN, enabled ? activeLevel : inactiveLevel);
+}
+
+void setLightBulbRelay(bool enabled) {
+  lightBulbEnabled = enabled;
+  const int activeLevel = LIGHT_BULB_RELAY_ACTIVE_LOW ? LOW : HIGH;
+  const int inactiveLevel = LIGHT_BULB_RELAY_ACTIVE_LOW ? HIGH : LOW;
+  digitalWrite(LIGHT_BULB_RELAY_PIN, enabled ? activeLevel : inactiveLevel);
+}
+
+bool readFirebaseEnabledCommand(String url, bool fallbackValue, const char* label) {
+  WiFiClientSecure client;
+  client.setInsecure();
+
+  HTTPClient http;
+  http.begin(client, url);
+
+  int responseCode = http.GET();
+  if (responseCode == 200) {
+    String payload = http.getString();
+    http.end();
+    if (payload == "null") {
+      return false;
+    }
+    return payload.indexOf("\"enabled\":true") >= 0;
+  }
+
+  Serial.print(label);
+  Serial.print(" control read failed: ");
+  Serial.println(responseCode);
+  http.end();
+  return fallbackValue;
+}
+
+void pollControlCommandsIfNeeded() {
+  if (WiFi.status() != WL_CONNECTED || !firebaseConfigured()) {
+    return;
+  }
+
+  if (millis() - lastFirebaseControlPollMs < FIREBASE_CONTROL_POLL_INTERVAL_MS) {
+    return;
+  }
+
+  lastFirebaseControlPollMs = millis();
+
+  bool nextWaterPumpEnabled = readFirebaseEnabledCommand(
+    firebaseWaterPumpControlUrl(),
+    waterPumpEnabled,
+    "Water pump"
+  );
+  if (nextWaterPumpEnabled != waterPumpEnabled) {
+    setWaterPumpRelay(nextWaterPumpEnabled);
+    Serial.print("Water pump relay: ");
+    Serial.println(waterPumpEnabled ? "ON" : "OFF");
+  }
+
+  bool nextLightBulbEnabled = readFirebaseEnabledCommand(
+    firebaseLightBulbControlUrl(),
+    lightBulbEnabled,
+    "Light bulb"
+  );
+  if (nextLightBulbEnabled != lightBulbEnabled) {
+    setLightBulbRelay(nextLightBulbEnabled);
+    Serial.print("Light bulb relay: ");
+    Serial.println(lightBulbEnabled ? "ON" : "OFF");
+  }
 }
 
 void uploadToFirebaseIfNeeded() {
@@ -342,6 +449,12 @@ void uploadToFirebaseIfNeeded() {
   payload += ",";
   payload += "\"feeder_distance_cm\":";
   payload += String(feederDistance, 1);
+  payload += ",";
+  payload += "\"water_pump_enabled\":";
+  payload += waterPumpEnabled ? "true" : "false";
+  payload += ",";
+  payload += "\"light_bulb_enabled\":";
+  payload += lightBulbEnabled ? "true" : "false";
   payload += ",";
   payload += "\"device\":\"esp32-dht22-hcsr04\",";
   payload += "\"local_ip\":\"";
@@ -509,6 +622,10 @@ void setup() {
   pinMode(FEEDER_ULTRASONIC_TRIG_PIN, OUTPUT);
   pinMode(FEEDER_ULTRASONIC_ECHO_PIN, INPUT);
   digitalWrite(FEEDER_ULTRASONIC_TRIG_PIN, LOW);
+  pinMode(WATER_PUMP_RELAY_PIN, OUTPUT);
+  setWaterPumpRelay(false);
+  pinMode(LIGHT_BULB_RELAY_PIN, OUTPUT);
+  setLightBulbRelay(false);
   startWiFi();
 
   server.on("/", HTTP_GET, handleRoot);
@@ -521,6 +638,7 @@ void setup() {
 
 void loop() {
   maintainWiFi();
+  pollControlCommandsIfNeeded();
   readSensorIfNeeded();
   uploadToFirebaseIfNeeded();
   saveEnvironmentalLogIfNeeded();

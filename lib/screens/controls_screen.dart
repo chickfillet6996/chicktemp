@@ -33,6 +33,7 @@ class _ControlsScreenState extends State<ControlsScreen> {
   bool _lightingExpanded = false;
   bool _mainFeederEnabled = false;
   bool _mainWaterEnabled = false;
+  bool _mainLightEnabled = false;
   final List<_VentilationDevice> _ventilationDevices = [];
   final List<_FeederDevice> _feederDevices = [];
   final List<WaterDevice> _waterDevices = [];
@@ -418,6 +419,10 @@ class _ControlsScreenState extends State<ControlsScreen> {
           },
         },
       );
+      await DeviceConfigStore.instance.saveWaterPumpControl(
+        batchName: widget.batchName,
+        enabled: _mainWaterEnabled,
+      );
     } on Object catch (_) {}
   }
 
@@ -452,6 +457,7 @@ class _ControlsScreenState extends State<ControlsScreen> {
         _lightingSchedulesByDeviceId
           ..clear()
           ..addAll(savedDeviceSchedules);
+        _mainLightEnabled = data['main_enabled'] == true;
         _lightingExpanded = data['expanded'] as bool? ?? _lightingExpanded;
       });
     } on Object catch (_) {}
@@ -462,6 +468,7 @@ class _ControlsScreenState extends State<ControlsScreen> {
       await DeviceConfigStore.instance.saveLightingConfig(
         batchName: widget.batchName,
         data: {
+          'main_enabled': _mainLightEnabled,
           'expanded': _lightingExpanded,
           'devices': _lightingDevices
               .map((device) => device.toJson())
@@ -471,6 +478,11 @@ class _ControlsScreenState extends State<ControlsScreen> {
               entry.key: List<String>.from(entry.value),
           },
         },
+      );
+      await DeviceConfigStore.instance.saveLightBulbControl(
+        batchName: widget.batchName,
+        enabled:
+            _mainLightEnabled || _lightingDevices.any((device) => device.enabled),
       );
     } on Object catch (_) {}
   }
@@ -851,8 +863,15 @@ class _ControlsScreenState extends State<ControlsScreen> {
                 LightingSystemDropdownCard(
                   expanded: _lightingExpanded,
                   devices: _lightingDevices,
+                  masterEnabled: _mainLightEnabled,
                   onTapHeader: _toggleLighting,
                   onAddDevice: _openAddLightingDeviceSheet,
+                  onToggleMaster: (value) {
+                    setState(() {
+                      _mainLightEnabled = value;
+                    });
+                    _persistLightingConfig();
+                  },
                   onAddSchedule: (index) => _openAddLightingScheduleSheet(
                     deviceId: _lightingDevices[index].id,
                   ),

@@ -386,7 +386,7 @@ class _WaterControlCard extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: const [
                 Text(
-                  'Main Water Control',
+                  '12V Water Pump Relay',
                   style: TextStyle(
                     color: Color(0xFF233047),
                     fontSize: 15,
@@ -395,7 +395,7 @@ class _WaterControlCard extends StatelessWidget {
                 ),
                 SizedBox(height: 6),
                 Text(
-                  'Master trigger inactive -\nIndividual controls still active',
+                  'Controls relay K1 / IN1.\nPump uses the separate 12V supply.',
                   style: TextStyle(
                     color: Color(0xFF93A0B6),
                     fontSize: 10,

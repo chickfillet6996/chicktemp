@@ -61,8 +61,10 @@ class LightingDevice {
 class LightingSystemDropdownCard extends StatelessWidget {
   final bool expanded;
   final List<LightingDevice> devices;
+  final bool masterEnabled;
   final VoidCallback onTapHeader;
   final VoidCallback onAddDevice;
+  final ValueChanged<bool> onToggleMaster;
   final void Function(int index) onAddSchedule;
   final void Function(int index) onDeleteDevice;
   final void Function(int index, bool value) onToggleDevice;
@@ -73,8 +75,10 @@ class LightingSystemDropdownCard extends StatelessWidget {
     super.key,
     required this.expanded,
     required this.devices,
+    required this.masterEnabled,
     required this.onTapHeader,
     required this.onAddDevice,
+    required this.onToggleMaster,
     required this.onAddSchedule,
     required this.onDeleteDevice,
     required this.onToggleDevice,
@@ -161,6 +165,11 @@ class LightingSystemDropdownCard extends StatelessWidget {
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
               child: Column(
                 children: [
+                  _LightingRelayControlCard(
+                    enabled: masterEnabled,
+                    onChanged: onToggleMaster,
+                  ),
+                  const SizedBox(height: 12),
                   if (hasDevice)
                     ...List.generate(devices.length, (index) {
                       final isLast = index == devices.length - 1;
@@ -216,6 +225,83 @@ class LightingSystemDropdownCard extends StatelessWidget {
               ),
             ),
             secondChild: const SizedBox.shrink(),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LightingRelayControlCard extends StatelessWidget {
+  final bool enabled;
+  final ValueChanged<bool> onChanged;
+
+  const _LightingRelayControlCard({
+    required this.enabled,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: const Color(0xFFE3E9E4)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: const [
+                Text(
+                  'Light Bulb Relay',
+                  style: TextStyle(
+                    color: Color(0xFF233047),
+                    fontSize: 15,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                SizedBox(height: 6),
+                Text(
+                  'Controls relay K2 / IN2.\nBulb uses the separate power line.',
+                  style: TextStyle(
+                    color: Color(0xFF93A0B6),
+                    fontSize: 10,
+                    fontWeight: FontWeight.w800,
+                    height: 1.2,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 10),
+          Text(
+            enabled ? 'ON' : 'OFF',
+            style: TextStyle(
+              color: enabled ? const Color(0xFFD28A00) : const Color(0xFF93A0B6),
+              fontSize: 11,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Switch(
+            value: enabled,
+            onChanged: onChanged,
+            activeColor: const Color(0xFFD28A00),
+            activeTrackColor: const Color(0xFFFFE9A8),
+            inactiveThumbColor: Colors.white,
+            inactiveTrackColor: const Color(0xFFD9E4D9),
           ),
         ],
       ),

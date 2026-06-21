@@ -59,6 +59,20 @@ class DeviceConfigStore {
     );
   }
 
+  Future<void> saveWaterPumpControl({
+    required String batchName,
+    required bool enabled,
+  }) async {
+    await _database.put(
+      'controls/${_batchKey(batchName)}/water_pump.json',
+      {
+        'enabled': enabled,
+        'source': 'controls_panel',
+        'updated_at': {'.sv': 'timestamp'},
+      },
+    );
+  }
+
   Future<Map<String, dynamic>?> loadLightingConfig({
     required String batchName,
   }) async {
@@ -73,6 +87,20 @@ class DeviceConfigStore {
       section: 'lighting_configs',
       batchName: batchName,
       data: data,
+    );
+  }
+
+  Future<void> saveLightBulbControl({
+    required String batchName,
+    required bool enabled,
+  }) async {
+    await _database.put(
+      'controls/${_batchKey(batchName)}/light_bulb.json',
+      {
+        'enabled': enabled,
+        'source': 'controls_panel',
+        'updated_at': {'.sv': 'timestamp'},
+      },
     );
   }
 
