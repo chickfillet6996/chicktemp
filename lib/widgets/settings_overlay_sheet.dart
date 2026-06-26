@@ -21,6 +21,7 @@ class SettingsOverlaySheet extends StatelessWidget {
     final bottomInset = MediaQuery.of(context).viewInsets.bottom;
 
     return Scaffold(
+      resizeToAvoidBottomInset: false,
       backgroundColor: const Color(0xFFF4F7F3),
       body: SplashBackground(
         showLineArt: showBackgroundLineArt,
@@ -38,6 +39,7 @@ class SettingsOverlaySheet extends StatelessWidget {
                   Expanded(
                     child: AnimatedPadding(
                       duration: const Duration(milliseconds: 180),
+                      curve: Curves.easeOutCubic,
                       padding: EdgeInsets.only(bottom: bottomInset),
                       child: child,
                     ),

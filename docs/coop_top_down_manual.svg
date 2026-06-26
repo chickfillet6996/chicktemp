@@ -1,0 +1,151 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="850" viewBox="0 0 1400 850">
+  <defs>
+    <style>
+      .page { fill: #faf7ef; }
+      .ink { fill: none; stroke: #2b2b2b; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+      .thin { fill: none; stroke: #2b2b2b; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+      .soft { fill: #efe2c4; stroke: #2b2b2b; stroke-width: 3; stroke-linejoin: round; }
+      .wood { fill: #c9924c; stroke: #2b2b2b; stroke-width: 3; }
+      .tank { fill: #9da6ad; stroke: #2b2b2b; stroke-width: 3; }
+      .water { fill: #b8dce9; stroke: #2b2b2b; stroke-width: 3; }
+      .feed { fill: #d3a45b; stroke: #2b2b2b; stroke-width: 3; }
+      .box { fill: #e8e8e1; stroke: #2b2b2b; stroke-width: 3; }
+      .wire-red { fill: none; stroke: #d23b2d; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+      .wire-yellow { fill: none; stroke: #d8a900; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+      .wire-green { fill: none; stroke: #2d9b58; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+      .wire-black { fill: none; stroke: #262626; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+      .pipe { fill: none; stroke: #1683c7; stroke-width: 9; stroke-linecap: round; stroke-linejoin: round; }
+      .pipe-edge { fill: none; stroke: #0b4d78; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+      .label { font-family: "Comic Sans MS", "Segoe Print", Arial, sans-serif; font-size: 20px; fill: #1f1f1f; }
+      .small { font-family: "Comic Sans MS", "Segoe Print", Arial, sans-serif; font-size: 16px; fill: #1f1f1f; }
+      .tiny { font-family: "Comic Sans MS", "Segoe Print", Arial, sans-serif; font-size: 13px; fill: #1f1f1f; }
+    </style>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="9" refY="4" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L10,4 L0,8 Z" fill="#2b2b2b"/>
+    </marker>
+    <marker id="blueArrow" markerWidth="12" markerHeight="12" refX="9" refY="4" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L10,4 L0,8 Z" fill="#0b4d78"/>
+    </marker>
+  </defs>
+
+  <rect class="page" width="1400" height="850"/>
+
+  <!-- Coop outline -->
+  <rect x="95" y="145" width="1080" height="520" rx="6" class="soft"/>
+  <path d="M101 151 L1170 148 M99 664 L1178 660 M95 145 L95 665 M1175 145 L1172 665" class="thin" opacity="0.55"/>
+  <path d="M105 190 L1165 190 M105 620 L1165 620" class="thin" opacity="0.35"/>
+  <path d="M210 145 L210 665 M385 145 L385 665 M560 145 L560 665 M735 145 L735 665 M910 145 L910 665 M1085 145 L1085 665" class="thin" opacity="0.18"/>
+
+  <text x="100" y="70" class="label">24 ft Long</text>
+  <path d="M100 86 L1175 86" class="thin" marker-end="url(#arrow)"/>
+  <text x="18" y="385" class="label" transform="rotate(-90 18 385)">8 ft Wide</text>
+  <path d="M55 150 L55 662" class="thin" marker-end="url(#arrow)"/>
+
+  <!-- Control enclosure -->
+  <rect x="1230" y="230" width="130" height="300" rx="8" class="box"/>
+  <rect x="1248" y="250" width="94" height="260" rx="4" fill="#d8d8cf" stroke="#2b2b2b" stroke-width="2"/>
+  <rect x="1268" y="275" width="42" height="70" fill="#486956" stroke="#2b2b2b" stroke-width="2"/>
+  <rect x="1260" y="375" width="68" height="96" fill="#4d585f" stroke="#2b2b2b" stroke-width="2"/>
+  <circle cx="1289" cy="309" r="8" fill="#f0c05a" stroke="#2b2b2b" stroke-width="2"/>
+  <text x="1218" y="210" class="label">Control Enclosure</text>
+  <text x="1275" y="268" class="tiny">ESP32</text>
+  <text x="1256" y="490" class="tiny">4 Channel Relay</text>
+
+  <!-- Water tank and pump close to enclosure -->
+  <ellipse cx="1230" cy="625" rx="48" ry="15" class="tank"/>
+  <rect x="1182" y="625" width="96" height="95" class="tank"/>
+  <ellipse cx="1230" cy="720" rx="48" ry="15" fill="#838c92" stroke="#2b2b2b" stroke-width="3"/>
+  <path d="M1185 650 L1275 650 M1185 682 L1275 682" class="thin" opacity="0.5"/>
+  <text x="1190" y="757" class="small">Water Tank</text>
+  <circle cx="1230" cy="603" r="14" fill="#56a8d6" stroke="#2b2b2b" stroke-width="3"/>
+  <circle cx="1222" cy="600" r="4" fill="#1f1f1f"/>
+  <circle cx="1238" cy="600" r="4" fill="#1f1f1f"/>
+  <text x="1100" y="595" class="small">Ultrasonic Water Level</text>
+  <path d="M1210 598 L1166 594" class="thin" marker-end="url(#arrow)"/>
+
+  <rect x="1288" y="666" width="58" height="42" rx="10" fill="#5b6065" stroke="#2b2b2b" stroke-width="3"/>
+  <circle cx="1298" cy="687" r="10" fill="#2e3337" stroke="#111" stroke-width="2"/>
+  <circle cx="1335" cy="687" r="10" fill="#2e3337" stroke="#111" stroke-width="2"/>
+  <text x="1285" y="733" class="small">Water Pump</text>
+
+  <!-- Water pipe: pump to water container only -->
+  <path d="M1288 686 L1240 686" class="pipe"/>
+  <path d="M1240 686 L1240 770 L170 770 L170 490 L300 490" class="pipe"/>
+  <path d="M1288 686 L1240 686 M1240 686 L1240 770 L170 770 L170 490 L300 490" class="pipe-edge" marker-end="url(#blueArrow)"/>
+  <path d="M1230 720 L1230 686" class="pipe"/>
+  <path d="M1230 720 L1230 686" class="pipe-edge"/>
+  <text x="270" y="748" class="small" fill="#0b4d78">Water Pipe: pump to water container</text>
+
+  <!-- Containers in middle -->
+  <rect x="300" y="455" width="330" height="70" rx="8" class="water"/>
+  <path d="M315 477 C390 464 485 490 615 475" fill="none" stroke="#6fb7cf" stroke-width="4"/>
+  <text x="395" y="550" class="small">Water Container</text>
+
+  <rect x="690" y="455" width="330" height="70" rx="8" class="feed"/>
+  <path d="M710 475 C780 460 880 488 1000 475" fill="none" stroke="#b07a31" stroke-width="4"/>
+  <text x="785" y="550" class="small">Feeder Container</text>
+
+  <!-- Feeder tank and feed drop -->
+  <rect x="800" y="305" width="150" height="105" rx="10" class="feed"/>
+  <ellipse cx="875" cy="305" rx="75" ry="16" fill="#dfb86d" stroke="#2b2b2b" stroke-width="3"/>
+  <path d="M845 410 L905 410 L930 455 L820 455 Z" fill="#d6a352" stroke="#2b2b2b" stroke-width="3"/>
+  <text x="815" y="285" class="small">Feeder Tank</text>
+  <circle cx="875" cy="284" r="14" fill="#56a8d6" stroke="#2b2b2b" stroke-width="3"/>
+  <circle cx="867" cy="281" r="4" fill="#1f1f1f"/>
+  <circle cx="883" cy="281" r="4" fill="#1f1f1f"/>
+  <text x="712" y="250" class="small">Ultrasonic Feeder Level</text>
+  <path d="M865 280 L823 258" class="thin" marker-end="url(#arrow)"/>
+
+  <rect x="920" y="420" width="58" height="36" rx="7" fill="#7a7f88" stroke="#2b2b2b" stroke-width="3"/>
+  <circle cx="936" cy="438" r="6" fill="#d9d9d9" stroke="#2b2b2b" stroke-width="2"/>
+  <text x="925" y="486" class="small">Servo Motor</text>
+
+  <!-- Center light bulbs -->
+  <path d="M520 210 L520 305 M720 210 L720 305" class="wire-yellow"/>
+  <circle cx="520" cy="330" r="18" fill="#ffd966" stroke="#2b2b2b" stroke-width="3"/>
+  <path d="M512 346 L528 346" class="thin"/>
+  <circle cx="720" cy="330" r="18" fill="#ffd966" stroke="#2b2b2b" stroke-width="3"/>
+  <path d="M712 346 L728 346" class="thin"/>
+  <text x="575" y="292" class="small">Light Bulb</text>
+
+  <!-- Stand fan -->
+  <circle cx="1080" cy="350" r="38" fill="#d9dee0" stroke="#2b2b2b" stroke-width="3"/>
+  <circle cx="1080" cy="350" r="8" fill="#50565b" stroke="#2b2b2b" stroke-width="2"/>
+  <path d="M1080 342 C1100 330 1110 344 1088 350 M1088 356 C1107 373 1090 386 1080 360 M1072 356 C1050 365 1046 344 1072 350" class="thin"/>
+  <path d="M1080 388 L1080 442 M1050 442 L1110 442" class="ink"/>
+  <text x="1028" y="305" class="small">Stand Fan</text>
+
+  <!-- DHT22 -->
+  <rect x="1130" y="255" width="36" height="54" rx="4" fill="#e6e2d9" stroke="#2b2b2b" stroke-width="3"/>
+  <path d="M1138 268 L1158 268 M1138 280 L1158 280 M1138 292 L1158 292" class="thin"/>
+  <text x="1062" y="252" class="small">DHT22</text>
+  <path d="M1128 270 L1095 255" class="thin" marker-end="url(#arrow)"/>
+
+  <!-- Simple chickens -->
+  <g fill="#b97937" stroke="#2b2b2b" stroke-width="2" opacity="0.8">
+    <ellipse cx="470" cy="390" rx="18" ry="12"/>
+    <circle cx="490" cy="382" r="8"/>
+    <ellipse cx="620" cy="405" rx="18" ry="12"/>
+    <circle cx="640" cy="397" r="8"/>
+    <ellipse cx="1015" cy="585" rx="18" ry="12"/>
+    <circle cx="1035" cy="577" r="8"/>
+  </g>
+
+  <!-- Electrical wires to control enclosure: no pump-to-servo wire -->
+  <path d="M1295 665 L1295 530" class="wire-red"/>
+  <path d="M1295 665 L1308 530" class="wire-black"/>
+  <path d="M1230 603 L1230 545 L1268 545 L1268 530" class="wire-green"/>
+  <path d="M875 284 L875 218 L1245 218 L1245 250" class="wire-green"/>
+  <path d="M949 420 L949 238 L1260 238 L1260 250" class="wire-yellow"/>
+  <path d="M1148 309 L1148 235 L1275 235 L1275 250" class="wire-red"/>
+  <path d="M1080 442 L1130 442 L1130 255 L1290 255" class="wire-black"/>
+  <path d="M520 210 L1240 210 L1240 250 M720 210 L1252 210 L1252 250" class="wire-yellow"/>
+  <path d="M630 490 L1195 490 L1195 530 L1282 530" class="wire-green" opacity="0.9"/>
+
+  <!-- Label pointers -->
+  <path d="M1092 306 L1079 337" class="thin" marker-end="url(#arrow)"/>
+  <path d="M975 480 L950 452" class="thin" marker-end="url(#arrow)"/>
+  <path d="M1288 733 L1312 706" class="thin" marker-end="url(#arrow)"/>
+  <path d="M395 535 L425 520" class="thin" marker-end="url(#arrow)"/>
+  <path d="M807 535 L820 520" class="thin" marker-end="url(#arrow)"/>
+</svg>

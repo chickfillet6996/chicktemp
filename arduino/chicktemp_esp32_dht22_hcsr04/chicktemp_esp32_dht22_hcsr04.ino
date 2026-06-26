@@ -3,6 +3,13 @@
 #include <WiFiClientSecure.h>
 #include <WebServer.h>
 #include <DHT.h>
+#include <time.h>
+
+#if defined(__has_include)
+#if __has_include(<esp_arduino_version.h>)
+#include <esp_arduino_version.h>
+#endif
+#endif
 
 // Install "DHT sensor library" by Adafruit in Arduino IDE Library Manager.
 // Board: ESP32 Dev Module. Default wiring: DHT22 data pin -> GPIO 14.
@@ -12,14 +19,14 @@
 // Water HC-SR04: TRIG -> GPIO 5, ECHO -> GPIO 18 through a voltage divider.
 #define WATER_ULTRASONIC_TRIG_PIN 5
 #define WATER_ULTRASONIC_ECHO_PIN 18
-const float WATER_TANK_EMPTY_DISTANCE_CM = 30.0;
-const float WATER_TANK_FULL_DISTANCE_CM = 3.0;
+const float WATER_TANK_EMPTY_DISTANCE_CM = 22.0;
+const float WATER_TANK_FULL_DISTANCE_CM = 11.6;
 
 // Feeder HC-SR04: TRIG -> GPIO 22, ECHO -> GPIO 23 through a voltage divider.
 #define FEEDER_ULTRASONIC_TRIG_PIN 22
 #define FEEDER_ULTRASONIC_ECHO_PIN 23
-const float FEEDER_EMPTY_DISTANCE_CM = 30.0;
-const float FEEDER_FULL_DISTANCE_CM = 3.0;
+const float FEEDER_EMPTY_DISTANCE_CM = 20.6;
+const float FEEDER_FULL_DISTANCE_CM = 6.0;
 
 // Relay K1 / IN1 controls the 12V water pump through a separate 12V supply.
 // Most 5V relay modules are active LOW. Change to false if yours works backward.
@@ -29,6 +36,24 @@ const float FEEDER_FULL_DISTANCE_CM = 3.0;
 // Relay K2 / IN2 controls the light bulb.
 #define LIGHT_BULB_RELAY_PIN 27
 #define LIGHT_BULB_RELAY_ACTIVE_LOW true
+
+// Relay K3 / IN3 controls the 5V ventilation fan.
+#define VENTILATION_FAN_RELAY_PIN 25
+#define VENTILATION_FAN_RELAY_ACTIVE_LOW true
+
+const float DEFAULT_MIN_TEMPERATURE_C = 28.0;
+const float DEFAULT_MAX_TEMPERATURE_C = 35.0;
+
+// SG90 feeder servo gate signal.
+#define FEEDER_SERVO_PIN 33
+// Calibrated for a safer SG90 range. If the flap moves backward, swap these two values.
+const int FEEDER_SERVO_CLOSED_PULSE_US = 1000;
+const int FEEDER_SERVO_OPEN_PULSE_US = 1800;
+const int FEEDER_SERVO_PWM_CHANNEL = 4;
+const int FEEDER_SERVO_PWM_FREQUENCY = 50;
+const int FEEDER_SERVO_PWM_RESOLUTION = 16;
+const unsigned long FEEDER_SERVO_PWM_PERIOD_US = 20000;
+const unsigned long FEEDER_SERVO_SETTLE_MS = 700;
 
 const char* WIFI_SSID = "ZTE_2.4G_uDF6tp";
 const char* WIFI_PASSWORD = "Kurtyu082541";
@@ -42,6 +67,7 @@ const unsigned long FIREBASE_ENVIRONMENTAL_LOG_INTERVAL_MS = 15UL * 60UL * 1000U
 const unsigned long FIREBASE_ENVIRONMENTAL_LOG_RETRY_MS = 10000;
 const unsigned long FIREBASE_CONTROL_POLL_INTERVAL_MS = 2000;
 const unsigned long WIFI_RECONNECT_INTERVAL_MS = 30000;
+const unsigned long TIME_SYNC_RETRY_MS = 60000;
 
 const char* AP_SSID = "ChickTemp-ESP32";
 const char* AP_PASSWORD = "chicktemp123";
@@ -64,12 +90,36 @@ unsigned long lastFirebaseLogMs = 0;
 unsigned long lastFirebaseLogAttemptMs = 0;
 unsigned long lastFirebaseControlPollMs = 0;
 unsigned long lastWiFiReconnectAttemptMs = 0;
+unsigned long lastTimeSyncRetryMs = 0;
 bool hasUploadedEnvironmentalLog = false;
+bool timeSyncRequested = false;
 bool waterPumpEnabled = false;
 bool lightBulbEnabled = false;
+bool ventilationFanEnabled = false;
+bool temperatureAutomationEnabled = true;
+float temperatureAutomationMinC = DEFAULT_MIN_TEMPERATURE_C;
+float temperatureAutomationMaxC = DEFAULT_MAX_TEMPERATURE_C;
+bool feederServoEnabled = false;
+bool feederServoGateOpen = false;
+unsigned long waterPumpStopAtMs = 0;
+unsigned long feederServoStopAtMs = 0;
+unsigned long feederServoSignalOffAtMs = 0;
+unsigned long lightBulbOverrideUntilMs = 0;
+unsigned long ventilationFanOverrideUntilMs = 0;
+long lastWaterPumpCommandId = -1;
+long lastFeederServoCommandId = -1;
+long lastLightBulbCommandId = -1;
+long lastVentilationFanCommandId = -1;
+String lastWaterScheduleRunKey = "";
+String lastFeederScheduleRunKey = "";
 double temperatureLogSum = 0;
 double humidityLogSum = 0;
 unsigned long environmentalLogSampleCount = 0;
+
+bool relayOverrideActive(unsigned long& overrideUntilMs);
+bool jsonBoolValue(String payload, const char* key, bool fallbackValue);
+long jsonLongValue(String payload, const char* key, long fallbackValue);
+void configureNetworkTime();
 
 float readUltrasonicDistanceCm(
   int triggerPin,
@@ -266,6 +316,18 @@ void handleSensor() {
   payload += "\"light_bulb_enabled\":";
   payload += lightBulbEnabled ? "true" : "false";
   payload += ",";
+  payload += "\"light_bulb_override_active\":";
+  payload += relayOverrideActive(lightBulbOverrideUntilMs) ? "true" : "false";
+  payload += ",";
+  payload += "\"ventilation_fan_enabled\":";
+  payload += ventilationFanEnabled ? "true" : "false";
+  payload += ",";
+  payload += "\"ventilation_fan_override_active\":";
+  payload += relayOverrideActive(ventilationFanOverrideUntilMs) ? "true" : "false";
+  payload += ",";
+  payload += "\"feeder_servo_enabled\":";
+  payload += feederServoEnabled ? "true" : "false";
+  payload += ",";
   payload += "\"device\":\"esp32-dht22-hcsr04\"";
   payload += ",";
   payload += "\"local_ip\":\"";
@@ -329,6 +391,30 @@ String firebaseLightBulbControlUrl() {
   return baseUrl + "/controls/" + FIREBASE_BATCH_ID + "/light_bulb.json";
 }
 
+String firebaseVentilationFanControlUrl() {
+  String baseUrl = FIREBASE_DATABASE_URL;
+  if (baseUrl.endsWith("/")) {
+    baseUrl.remove(baseUrl.length() - 1);
+  }
+  return baseUrl + "/controls/" + FIREBASE_BATCH_ID + "/ventilation_fan.json";
+}
+
+String firebaseTemperatureAutomationControlUrl() {
+  String baseUrl = FIREBASE_DATABASE_URL;
+  if (baseUrl.endsWith("/")) {
+    baseUrl.remove(baseUrl.length() - 1);
+  }
+  return baseUrl + "/controls/" + FIREBASE_BATCH_ID + "/temperature_automation.json";
+}
+
+String firebaseFeederServoControlUrl() {
+  String baseUrl = FIREBASE_DATABASE_URL;
+  if (baseUrl.endsWith("/")) {
+    baseUrl.remove(baseUrl.length() - 1);
+  }
+  return baseUrl + "/controls/" + FIREBASE_BATCH_ID + "/feeder_servo.json";
+}
+
 void setWaterPumpRelay(bool enabled) {
   waterPumpEnabled = enabled;
   const int activeLevel = WATER_PUMP_RELAY_ACTIVE_LOW ? LOW : HIGH;
@@ -341,6 +427,150 @@ void setLightBulbRelay(bool enabled) {
   const int activeLevel = LIGHT_BULB_RELAY_ACTIVE_LOW ? LOW : HIGH;
   const int inactiveLevel = LIGHT_BULB_RELAY_ACTIVE_LOW ? HIGH : LOW;
   digitalWrite(LIGHT_BULB_RELAY_PIN, enabled ? activeLevel : inactiveLevel);
+}
+
+void setVentilationFanRelay(bool enabled) {
+  ventilationFanEnabled = enabled;
+  const int activeLevel = VENTILATION_FAN_RELAY_ACTIVE_LOW ? LOW : HIGH;
+  const int inactiveLevel = VENTILATION_FAN_RELAY_ACTIVE_LOW ? HIGH : LOW;
+  digitalWrite(VENTILATION_FAN_RELAY_PIN, enabled ? activeLevel : inactiveLevel);
+}
+
+uint32_t feederServoDutyForPulse(int pulseUs) {
+  const uint32_t maxDuty = (1UL << FEEDER_SERVO_PWM_RESOLUTION) - 1;
+  return (uint32_t)((pulseUs * maxDuty) / FEEDER_SERVO_PWM_PERIOD_US);
+}
+
+void writeFeederServoPulse(int pulseUs) {
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
+  ledcWrite(FEEDER_SERVO_PIN, feederServoDutyForPulse(pulseUs));
+#else
+  ledcWrite(FEEDER_SERVO_PWM_CHANNEL, feederServoDutyForPulse(pulseUs));
+#endif
+}
+
+void stopFeederServoSignal() {
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
+  ledcWrite(FEEDER_SERVO_PIN, 0);
+#else
+  ledcWrite(FEEDER_SERVO_PWM_CHANNEL, 0);
+#endif
+}
+
+void setupFeederServoPwm() {
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
+  ledcAttach(
+    FEEDER_SERVO_PIN,
+    FEEDER_SERVO_PWM_FREQUENCY,
+    FEEDER_SERVO_PWM_RESOLUTION
+  );
+#else
+  ledcSetup(
+    FEEDER_SERVO_PWM_CHANNEL,
+    FEEDER_SERVO_PWM_FREQUENCY,
+    FEEDER_SERVO_PWM_RESOLUTION
+  );
+  ledcAttachPin(FEEDER_SERVO_PIN, FEEDER_SERVO_PWM_CHANNEL);
+#endif
+}
+
+void setFeederServoGate(bool open) {
+  feederServoEnabled = open;
+  feederServoGateOpen = open;
+  feederServoSignalOffAtMs = open ? 0 : millis() + FEEDER_SERVO_SETTLE_MS;
+  writeFeederServoPulse(
+    open ? FEEDER_SERVO_OPEN_PULSE_US : FEEDER_SERVO_CLOSED_PULSE_US
+  );
+}
+
+void startWaterPumpRun(unsigned long durationMs) {
+  if (durationMs == 0) {
+    return;
+  }
+  setWaterPumpRelay(true);
+  waterPumpStopAtMs = millis() + durationMs;
+  Serial.print("Timed water pump run: ");
+  Serial.print(durationMs / 1000);
+  Serial.println(" seconds");
+}
+
+void startFeederServoRun(unsigned long durationMs) {
+  if (durationMs == 0) {
+    return;
+  }
+  setFeederServoGate(true);
+  feederServoStopAtMs = millis() + durationMs;
+  Serial.print("Timed feeder servo run: ");
+  Serial.print(durationMs / 1000);
+  Serial.println(" seconds");
+}
+
+void updateTimedActuators() {
+  if (waterPumpStopAtMs != 0 && (long)(millis() - waterPumpStopAtMs) >= 0) {
+    waterPumpStopAtMs = 0;
+    setWaterPumpRelay(false);
+    Serial.println("Timed water pump run finished.");
+  }
+
+  if (feederServoStopAtMs != 0 && (long)(millis() - feederServoStopAtMs) >= 0) {
+    feederServoStopAtMs = 0;
+    setFeederServoGate(false);
+    Serial.println("Timed feeder servo run finished.");
+  }
+
+  if (feederServoSignalOffAtMs != 0 &&
+      (long)(millis() - feederServoSignalOffAtMs) >= 0) {
+    feederServoSignalOffAtMs = 0;
+    stopFeederServoSignal();
+  }
+}
+
+bool timedActuatorRunActive() {
+  return waterPumpStopAtMs != 0 || feederServoStopAtMs != 0;
+}
+
+bool relayOverrideActive(unsigned long& overrideUntilMs) {
+  if (overrideUntilMs == 0) {
+    return false;
+  }
+  if ((long)(millis() - overrideUntilMs) >= 0) {
+    overrideUntilMs = 0;
+    return false;
+  }
+  return true;
+}
+
+void applyManualOverrideCommand(
+  String payload,
+  const char* label,
+  long& lastCommandId,
+  unsigned long& overrideUntilMs,
+  void (*setRelay)(bool)
+) {
+  long commandId = jsonLongValue(payload, "command_id", -1);
+  if (commandId < 0 || commandId == lastCommandId) {
+    return;
+  }
+
+  lastCommandId = commandId;
+  if (jsonBoolValue(payload, "manual_override_cancel", false)) {
+    overrideUntilMs = 0;
+    Serial.print(label);
+    Serial.println(" manual override cleared; automation resumed.");
+    return;
+  }
+
+  long durationMs = jsonLongValue(payload, "manual_override_duration_ms", 0);
+  if (durationMs <= 0) {
+    return;
+  }
+
+  bool overrideEnabled = jsonBoolValue(payload, "enabled", false);
+  overrideUntilMs = millis() + (unsigned long)durationMs;
+  setRelay(overrideEnabled);
+  Serial.print(label);
+  Serial.print(" manual override: ");
+  Serial.println(overrideEnabled ? "ON" : "OFF");
 }
 
 bool readFirebaseEnabledCommand(String url, bool fallbackValue, const char* label) {
@@ -367,8 +597,286 @@ bool readFirebaseEnabledCommand(String url, bool fallbackValue, const char* labe
   return fallbackValue;
 }
 
+String readFirebasePayload(String url, const char* label) {
+  WiFiClientSecure client;
+  client.setInsecure();
+
+  HTTPClient http;
+  http.begin(client, url);
+  int responseCode = http.GET();
+  if (responseCode == 200) {
+    String payload = http.getString();
+    http.end();
+    return payload == "null" ? "" : payload;
+  }
+
+  Serial.print(label);
+  Serial.print(" control read failed: ");
+  Serial.println(responseCode);
+  http.end();
+  return "";
+}
+
+bool jsonBoolValue(String payload, const char* key, bool fallbackValue) {
+  String token = "\"";
+  token += key;
+  token += "\":true";
+  if (payload.indexOf(token) >= 0) {
+    return true;
+  }
+
+  token = "\"";
+  token += key;
+  token += "\":false";
+  if (payload.indexOf(token) >= 0) {
+    return false;
+  }
+
+  return fallbackValue;
+}
+
+long jsonLongValue(String payload, const char* key, long fallbackValue) {
+  String token = "\"";
+  token += key;
+  token += "\":";
+  int start = payload.indexOf(token);
+  if (start < 0) {
+    return fallbackValue;
+  }
+
+  start += token.length();
+  while (start < payload.length() && payload[start] == ' ') {
+    start++;
+  }
+
+  int end = start;
+  while (end < payload.length() &&
+         (payload[end] == '-' || (payload[end] >= '0' && payload[end] <= '9'))) {
+    end++;
+  }
+
+  if (end <= start) {
+    return fallbackValue;
+  }
+
+  return payload.substring(start, end).toInt();
+}
+
+float jsonFloatValue(String payload, const char* key, float fallbackValue) {
+  String token = "\"";
+  token += key;
+  token += "\":";
+  int start = payload.indexOf(token);
+  if (start < 0) {
+    return fallbackValue;
+  }
+
+  start += token.length();
+  while (start < payload.length() && payload[start] == ' ') {
+    start++;
+  }
+
+  int end = start;
+  while (end < payload.length() &&
+         (payload[end] == '-' ||
+          payload[end] == '.' ||
+          (payload[end] >= '0' && payload[end] <= '9'))) {
+    end++;
+  }
+
+  if (end <= start) {
+    return fallbackValue;
+  }
+
+  return payload.substring(start, end).toFloat();
+}
+
+bool readTimedControlCommand(
+  String url,
+  bool fallbackEnabled,
+  const char* label,
+  bool& enabled,
+  unsigned long& durationMs,
+  long& commandId,
+  String& payload
+) {
+  enabled = fallbackEnabled;
+  durationMs = 0;
+  commandId = -1;
+  payload = "";
+
+  payload = readFirebasePayload(url, label);
+  if (payload.length() == 0) {
+    return false;
+  }
+
+  enabled = jsonBoolValue(payload, "enabled", false);
+  long parsedDurationMs = jsonLongValue(payload, "duration_ms", 0);
+  durationMs = parsedDurationMs > 0 ? (unsigned long)parsedDurationMs : 0;
+  commandId = jsonLongValue(payload, "command_id", -1);
+  return true;
+}
+
+void readTemperatureAutomationConfig() {
+  String payload = readFirebasePayload(
+    firebaseTemperatureAutomationControlUrl(),
+    "Temperature automation"
+  );
+  if (payload.length() == 0) {
+    return;
+  }
+
+  bool nextEnabled = jsonBoolValue(payload, "enabled", true);
+  float nextMin = jsonFloatValue(
+    payload,
+    "min_temperature",
+    temperatureAutomationMinC
+  );
+  float nextMax = jsonFloatValue(
+    payload,
+    "max_temperature",
+    temperatureAutomationMaxC
+  );
+
+  if (nextMin >= nextMax) {
+    Serial.println("Temperature automation range ignored: min >= max");
+    return;
+  }
+
+  temperatureAutomationEnabled = nextEnabled;
+  temperatureAutomationMinC = nextMin;
+  temperatureAutomationMaxC = nextMax;
+}
+
+void applyTemperatureAutomation() {
+  if (!temperatureAutomationEnabled || !isDhtReadingLive || isnan(lastTemperature)) {
+    return;
+  }
+
+  bool shouldRunFan = lastTemperature > temperatureAutomationMaxC;
+  bool shouldRunLight = lastTemperature < temperatureAutomationMinC;
+  bool fanOverrideActive = relayOverrideActive(ventilationFanOverrideUntilMs);
+  bool lightOverrideActive = relayOverrideActive(lightBulbOverrideUntilMs);
+
+  if (!fanOverrideActive && shouldRunFan != ventilationFanEnabled) {
+    setVentilationFanRelay(shouldRunFan);
+    Serial.print("Temperature automation fan: ");
+    Serial.println(ventilationFanEnabled ? "ON" : "OFF");
+  }
+
+  if (!lightOverrideActive && shouldRunLight != lightBulbEnabled) {
+    setLightBulbRelay(shouldRunLight);
+    Serial.print("Temperature automation light: ");
+    Serial.println(lightBulbEnabled ? "ON" : "OFF");
+  }
+}
+
+bool currentLocalTimeCode(
+  char* buffer,
+  size_t bufferSize,
+  int* yearDay,
+  int* weekDay
+) {
+  struct tm timeInfo;
+  if (!getLocalTime(&timeInfo, 250)) {
+    if (WiFi.status() == WL_CONNECTED &&
+        millis() - lastTimeSyncRetryMs >= TIME_SYNC_RETRY_MS) {
+      lastTimeSyncRetryMs = millis();
+      configureNetworkTime();
+      Serial.println("Schedule clock not ready; retrying time sync.");
+    }
+    return false;
+  }
+
+  snprintf(buffer, bufferSize, "%02d:%02d", timeInfo.tm_hour, timeInfo.tm_min);
+  *yearDay = timeInfo.tm_yday;
+  *weekDay = timeInfo.tm_wday;
+  return true;
+}
+
+void runDueScheduleCodes(
+  String payload,
+  const char* label,
+  String& lastRunKey,
+  void (*startRun)(unsigned long)
+) {
+  int scheduleIndex = payload.indexOf("\"schedule_codes\"");
+  if (scheduleIndex < 0) {
+    return;
+  }
+
+  char currentTime[6];
+  int yearDay = 0;
+  int weekDay = 0;
+  if (!currentLocalTimeCode(
+        currentTime,
+        sizeof(currentTime),
+        &yearDay,
+        &weekDay
+      )) {
+    return;
+  }
+
+  int cursor = payload.indexOf("[", scheduleIndex);
+  int endArray = payload.indexOf("]", cursor);
+  if (cursor < 0 || endArray < 0) {
+    return;
+  }
+
+  while (cursor < endArray) {
+    int quoteStart = payload.indexOf("\"", cursor);
+    if (quoteStart < 0 || quoteStart >= endArray) {
+      break;
+    }
+    int quoteEnd = payload.indexOf("\"", quoteStart + 1);
+    if (quoteEnd < 0 || quoteEnd > endArray) {
+      break;
+    }
+
+    String code = payload.substring(quoteStart + 1, quoteEnd);
+    int firstPipe = code.indexOf("|");
+    int secondPipe = code.indexOf("|", firstPipe + 1);
+    int thirdPipe = code.indexOf("|", secondPipe + 1);
+    int fourthPipe = code.indexOf("|", thirdPipe + 1);
+    if (firstPipe > 0 && secondPipe > firstPipe && thirdPipe > secondPipe) {
+      String timeCode = code.substring(0, firstPipe);
+      unsigned long durationMs = code.substring(firstPipe + 1, secondPipe).toInt();
+      bool active = (fourthPipe > thirdPipe
+        ? code.substring(thirdPipe + 1, fourthPipe)
+        : code.substring(thirdPipe + 1)
+      ).toInt() == 1;
+      int daysMask = fourthPipe > thirdPipe
+        ? code.substring(fourthPipe + 1).toInt()
+        : 0x7F;
+      if (daysMask <= 0) {
+        daysMask = 0x7F;
+      }
+      bool dayMatches = (daysMask & (1 << weekDay)) != 0;
+      String runKey = String(label) + "|" + timeCode + "|" + String(yearDay);
+      if (active &&
+          dayMatches &&
+          durationMs > 0 &&
+          timeCode == currentTime &&
+          runKey != lastRunKey) {
+        lastRunKey = runKey;
+        Serial.print(label);
+        Serial.print(" scheduled run at ");
+        Serial.println(timeCode);
+        startRun(durationMs);
+      }
+    }
+
+    cursor = quoteEnd + 1;
+  }
+}
+
 void pollControlCommandsIfNeeded() {
   if (WiFi.status() != WL_CONNECTED || !firebaseConfigured()) {
+    return;
+  }
+
+  updateTimedActuators();
+  if (timedActuatorRunActive()) {
     return;
   }
 
@@ -378,31 +886,165 @@ void pollControlCommandsIfNeeded() {
 
   lastFirebaseControlPollMs = millis();
 
-  bool nextWaterPumpEnabled = readFirebaseEnabledCommand(
+  bool waterCommandEnabled = waterPumpEnabled;
+  unsigned long waterCommandDurationMs = 0;
+  long waterCommandId = -1;
+  String waterCommandPayload = "";
+  bool waterCommandAvailable = readTimedControlCommand(
     firebaseWaterPumpControlUrl(),
     waterPumpEnabled,
-    "Water pump"
+    "Water pump",
+    waterCommandEnabled,
+    waterCommandDurationMs,
+    waterCommandId,
+    waterCommandPayload
   );
-  if (nextWaterPumpEnabled != waterPumpEnabled) {
-    setWaterPumpRelay(nextWaterPumpEnabled);
-    Serial.print("Water pump relay: ");
-    Serial.println(waterPumpEnabled ? "ON" : "OFF");
+  if (waterCommandAvailable) {
+    bool waterSchedulesEnabled = jsonBoolValue(
+      waterCommandPayload,
+      "schedules_enabled",
+      waterCommandEnabled
+    );
+    if (!waterSchedulesEnabled) {
+      if (waterCommandDurationMs > 0 && waterCommandId != lastWaterPumpCommandId) {
+        lastWaterPumpCommandId = waterCommandId;
+        Serial.println("Water pump timed command ignored: power is off.");
+      }
+      waterPumpStopAtMs = 0;
+      if (waterPumpEnabled) {
+        setWaterPumpRelay(false);
+        Serial.println("Water pump relay: OFF (power disabled)");
+      }
+    } else if (waterCommandDurationMs > 0 &&
+               waterCommandId != lastWaterPumpCommandId) {
+      lastWaterPumpCommandId = waterCommandId;
+      startWaterPumpRun(waterCommandDurationMs);
+    } else if (waterPumpStopAtMs == 0 &&
+               waterCommandEnabled != waterPumpEnabled) {
+      setWaterPumpRelay(waterCommandEnabled);
+      Serial.print("Water pump relay: ");
+      Serial.println(waterPumpEnabled ? "ON" : "OFF");
+    }
+    if (waterSchedulesEnabled && !waterCommandEnabled) {
+      runDueScheduleCodes(
+        waterCommandPayload,
+        "Water pump",
+        lastWaterScheduleRunKey,
+        startWaterPumpRun
+      );
+    }
   }
 
-  bool nextLightBulbEnabled = readFirebaseEnabledCommand(
+  String lightBulbPayload = readFirebasePayload(
     firebaseLightBulbControlUrl(),
-    lightBulbEnabled,
     "Light bulb"
   );
-  if (nextLightBulbEnabled != lightBulbEnabled) {
-    setLightBulbRelay(nextLightBulbEnabled);
-    Serial.print("Light bulb relay: ");
-    Serial.println(lightBulbEnabled ? "ON" : "OFF");
+  bool nextLightBulbEnabled = lightBulbPayload.length() == 0
+      ? lightBulbEnabled
+      : jsonBoolValue(lightBulbPayload, "enabled", lightBulbEnabled);
+  if (lightBulbPayload.length() > 0) {
+    applyManualOverrideCommand(
+      lightBulbPayload,
+      "Light bulb",
+      lastLightBulbCommandId,
+      lightBulbOverrideUntilMs,
+      setLightBulbRelay
+    );
+  }
+
+  String ventilationFanPayload = readFirebasePayload(
+    firebaseVentilationFanControlUrl(),
+    "Ventilation fan"
+  );
+  bool nextVentilationFanEnabled = ventilationFanPayload.length() == 0
+      ? ventilationFanEnabled
+      : jsonBoolValue(ventilationFanPayload, "enabled", ventilationFanEnabled);
+  if (ventilationFanPayload.length() > 0) {
+    applyManualOverrideCommand(
+      ventilationFanPayload,
+      "Ventilation fan",
+      lastVentilationFanCommandId,
+      ventilationFanOverrideUntilMs,
+      setVentilationFanRelay
+    );
+  }
+
+  readTemperatureAutomationConfig();
+  if (temperatureAutomationEnabled && isDhtReadingLive && !isnan(lastTemperature)) {
+    applyTemperatureAutomation();
+  } else {
+    if (!relayOverrideActive(lightBulbOverrideUntilMs) &&
+        nextLightBulbEnabled != lightBulbEnabled) {
+      setLightBulbRelay(nextLightBulbEnabled);
+      Serial.print("Light bulb relay: ");
+      Serial.println(lightBulbEnabled ? "ON" : "OFF");
+    }
+    if (!relayOverrideActive(ventilationFanOverrideUntilMs) &&
+        nextVentilationFanEnabled != ventilationFanEnabled) {
+      setVentilationFanRelay(nextVentilationFanEnabled);
+      Serial.print("Ventilation fan relay: ");
+      Serial.println(ventilationFanEnabled ? "ON" : "OFF");
+    }
+  }
+
+  bool feederCommandEnabled = feederServoEnabled;
+  unsigned long feederCommandDurationMs = 0;
+  long feederCommandId = -1;
+  String feederCommandPayload = "";
+  bool feederCommandAvailable = readTimedControlCommand(
+    firebaseFeederServoControlUrl(),
+    feederServoEnabled,
+    "Feeder servo",
+    feederCommandEnabled,
+    feederCommandDurationMs,
+    feederCommandId,
+    feederCommandPayload
+  );
+  if (feederCommandAvailable) {
+    bool feederSchedulesEnabled = jsonBoolValue(
+      feederCommandPayload,
+      "schedules_enabled",
+      feederCommandEnabled
+    );
+    if (!feederSchedulesEnabled) {
+      if (feederCommandDurationMs > 0 &&
+          feederCommandId != lastFeederServoCommandId) {
+        lastFeederServoCommandId = feederCommandId;
+        Serial.println("Feeder servo timed command ignored: power is off.");
+      }
+      feederServoStopAtMs = 0;
+      if (feederServoEnabled) {
+        setFeederServoGate(false);
+        Serial.println("Feeder servo gate: CLOSED (power disabled)");
+      }
+    } else if (feederCommandDurationMs > 0 &&
+               feederCommandId != lastFeederServoCommandId) {
+      lastFeederServoCommandId = feederCommandId;
+      startFeederServoRun(feederCommandDurationMs);
+    } else if (feederServoStopAtMs == 0 &&
+               feederCommandEnabled != feederServoEnabled) {
+      setFeederServoGate(feederCommandEnabled);
+      Serial.print("Feeder servo gate: ");
+      Serial.println(feederServoEnabled ? "OPEN" : "CLOSED");
+    }
+    if (feederSchedulesEnabled && !feederCommandEnabled) {
+      runDueScheduleCodes(
+        feederCommandPayload,
+        "Feeder servo",
+        lastFeederScheduleRunKey,
+        startFeederServoRun
+      );
+    }
   }
 }
 
 void uploadToFirebaseIfNeeded() {
   if (WiFi.status() != WL_CONNECTED || !firebaseConfigured()) {
+    return;
+  }
+
+  updateTimedActuators();
+  if (timedActuatorRunActive()) {
     return;
   }
 
@@ -456,6 +1098,18 @@ void uploadToFirebaseIfNeeded() {
   payload += "\"light_bulb_enabled\":";
   payload += lightBulbEnabled ? "true" : "false";
   payload += ",";
+  payload += "\"light_bulb_override_active\":";
+  payload += relayOverrideActive(lightBulbOverrideUntilMs) ? "true" : "false";
+  payload += ",";
+  payload += "\"ventilation_fan_enabled\":";
+  payload += ventilationFanEnabled ? "true" : "false";
+  payload += ",";
+  payload += "\"ventilation_fan_override_active\":";
+  payload += relayOverrideActive(ventilationFanOverrideUntilMs) ? "true" : "false";
+  payload += ",";
+  payload += "\"feeder_servo_enabled\":";
+  payload += feederServoEnabled ? "true" : "false";
+  payload += ",";
   payload += "\"device\":\"esp32-dht22-hcsr04\",";
   payload += "\"local_ip\":\"";
   payload += WiFi.localIP().toString();
@@ -481,6 +1135,11 @@ void uploadToFirebaseIfNeeded() {
 
 void saveEnvironmentalLogIfNeeded() {
   if (WiFi.status() != WL_CONNECTED || !firebaseConfigured()) {
+    return;
+  }
+
+  updateTimedActuators();
+  if (timedActuatorRunActive()) {
     return;
   }
 
@@ -565,6 +1224,12 @@ void saveEnvironmentalLogIfNeeded() {
   http.end();
 }
 
+void configureNetworkTime() {
+  configTime(8 * 3600, 0, "pool.ntp.org", "time.nist.gov");
+  timeSyncRequested = true;
+  Serial.println("Network time sync requested.");
+}
+
 void startWiFi() {
   // AP + station mode keeps local access available while Firebase uses farm WiFi.
   WiFi.mode(WIFI_AP_STA);
@@ -587,6 +1252,7 @@ void startWiFi() {
     Serial.println();
 
     if (WiFi.status() == WL_CONNECTED) {
+      configureNetworkTime();
       Serial.print("Connected. Sensor URL: http://");
       Serial.print(WiFi.localIP());
       Serial.println("/sensor");
@@ -598,7 +1264,16 @@ void startWiFi() {
 }
 
 void maintainWiFi() {
-  if (WiFi.status() == WL_CONNECTED || strlen(WIFI_SSID) == 0) {
+  if (WiFi.status() == WL_CONNECTED) {
+    if (!timeSyncRequested) {
+      configureNetworkTime();
+    }
+    return;
+  }
+
+  timeSyncRequested = false;
+
+  if (strlen(WIFI_SSID) == 0) {
     return;
   }
 
@@ -626,6 +1301,10 @@ void setup() {
   setWaterPumpRelay(false);
   pinMode(LIGHT_BULB_RELAY_PIN, OUTPUT);
   setLightBulbRelay(false);
+  pinMode(VENTILATION_FAN_RELAY_PIN, OUTPUT);
+  setVentilationFanRelay(false);
+  setupFeederServoPwm();
+  setFeederServoGate(false);
   startWiFi();
 
   server.on("/", HTTP_GET, handleRoot);
@@ -638,8 +1317,10 @@ void setup() {
 
 void loop() {
   maintainWiFi();
+  updateTimedActuators();
   pollControlCommandsIfNeeded();
   readSensorIfNeeded();
+  updateTimedActuators();
   uploadToFirebaseIfNeeded();
   saveEnvironmentalLogIfNeeded();
   server.handleClient();

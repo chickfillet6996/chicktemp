@@ -1,0 +1,195 @@
+flowchart LR
+  user["Farm Manager / User"]
+  esp32["ESP32 Sensor Device"]
+  firebase[("Firebase Realtime Database")]
+  support_email["Support Email Service"]
+
+  subgraph app["CHICKTEMP Farm Management Mobile App - User Interaction Model"]
+    subgraph account["Account & Security Services"]
+      createAccount(["Create Account"])
+      login(["Login"])
+      rememberLogin(["Remember Login"])
+      resetPassword(["Reset Password"])
+      manageProfile(["Manage Account Profile & Security"])
+      updateProfile(["Update Personal Details"])
+      changePassword(["Change Password"])
+      logout(["Logout"])
+    end
+
+    subgraph prefs["Application Preferences & Alerts"]
+      viewAlerts(["View System Alerts"])
+      configureAlerts(["Configure Alert Preferences"])
+      markAlerts(["Mark Alerts Read / Unread"])
+      receiveAlerts(["Receive Temperature, Device & Schedule Alerts"])
+      highTemp(["High Temperature Alert"])
+      lowTemp(["Low Temperature Alert"])
+      deviceOffline(["Device Offline Alert"])
+      feedingReminder(["Feeding Schedule Reminder"])
+      waterReminder(["Water Schedule Reminder"])
+      lightingReminder(["Lighting Schedule Reminder"])
+    end
+
+    subgraph environmental["Environmental Control System (Sub-System Layer)"]
+      subgraph monitoring["Dashboard, Monitoring & Analytics"]
+        viewMainDashboard(["View Main Dashboard"])
+        viewBatchDashboard(["View Batch Dashboard"])
+        viewRealtime(["View Real-Time Environmental Data"])
+        viewTemperature(["View Temperature"])
+        viewHumidity(["View Humidity"])
+        viewWaterLevel(["View Water Level"])
+        viewFeedLevel(["View Feed Level"])
+        viewOffline(["View Last Recorded Data When Offline"])
+        viewAnalytics(["View Analytics Dashboard"])
+        viewTrends(["View Temperature & Humidity Trends"])
+        viewMortalityMetrics(["View Mortality & Survival Metrics"])
+        viewDeviceUsage(["View Device Usage Summary"])
+      end
+
+      subgraph controls["Operational Control"]
+        manageControls(["Manage Device Controls"])
+        tempAutomation(["Configure Temperature Automation Rules"])
+        setThresholds(["Set Minimum / Maximum Temperature Thresholds"])
+        controlFan(["Control Ventilation Fan"])
+        adjustFanSpeed(["Adjust Fan Speed"])
+        controlFeeder(["Control Feeder Servo"])
+        controlWater(["Control Water Pump"])
+        controlLighting(["Control Lighting Relay"])
+        setBrightness(["Set Lighting Brightness"])
+        feedingSchedule(["Manage Feeding Schedule"])
+        waterSchedule(["Manage Water Schedule"])
+        lightingSchedule(["Manage Lighting Schedule"])
+        toggleDevices(["Enable / Disable Devices"])
+        removeDevice(["Remove Device"])
+      end
+
+      subgraph reports["Reports & Records"]
+        manageReports(["Manage Reports"])
+        dailyReport(["Generate Daily Environmental Report"])
+        mortalityReport(["Generate Mortality Report"])
+        deviceReport(["Generate Device Activity Report"])
+        maintenanceReport(["Generate Maintenance Report"])
+        batchSummary(["Generate Batch Summary Report"])
+        exportPdf(["Export Report as PDF"])
+        recordEvent(["Record Event Log"])
+        recordMaintenance(["Record Maintenance Log"])
+        viewHistory(["View Environmental History"])
+      end
+
+      subgraph batches["Batch & Poultry Asset Management"]
+        manageBatches(["Manage Poultry Batches"])
+        createBatch(["Create Batch"])
+        editBatch(["Edit Batch Details"])
+        deleteBatch(["Delete Batch"])
+        updateGrowDay(["Update Grow-Out Day"])
+        manageMortality(["Manage Mortality Records"])
+        recordDeaths(["Record Dead Chickens"])
+        viewMortalityHistory(["View Mortality History"])
+        analyzeMortality(["Analyze Mortality & Survival Rate"])
+      end
+    end
+
+    subgraph support["Support & Information"]
+      accessSupport(["Access Support Services"])
+      helpCenter(["View Help Center & FAQs"])
+      contactSupport(["Contact Customer Support"])
+      aboutApp(["View About App"])
+      policies(["View App Policies & Procedures"])
+    end
+  end
+
+  user --> createAccount
+  user --> login
+  user --> resetPassword
+  user --> manageProfile
+  user --> logout
+  user --> viewAlerts
+  user --> viewMainDashboard
+  user --> viewBatchDashboard
+  user --> viewAnalytics
+  user --> manageControls
+  user --> manageReports
+  user --> manageBatches
+  user --> manageMortality
+  user --> accessSupport
+
+  login -. "<<extend>>" .-> rememberLogin
+  manageProfile -. "<<include>>" .-> updateProfile
+  manageProfile -. "<<include>>" .-> changePassword
+
+  viewAlerts -. "<<include>>" .-> configureAlerts
+  viewAlerts -. "<<include>>" .-> markAlerts
+  viewAlerts -. "<<include>>" .-> receiveAlerts
+  receiveAlerts -. "<<extend>>" .-> highTemp
+  receiveAlerts -. "<<extend>>" .-> lowTemp
+  receiveAlerts -. "<<extend>>" .-> deviceOffline
+  receiveAlerts -. "<<extend>>" .-> feedingReminder
+  receiveAlerts -. "<<extend>>" .-> waterReminder
+  receiveAlerts -. "<<extend>>" .-> lightingReminder
+
+  viewMainDashboard -. "<<include>>" .-> manageBatches
+  viewBatchDashboard -. "<<include>>" .-> viewRealtime
+  viewBatchDashboard -. "<<extend>>" .-> updateGrowDay
+  viewRealtime -. "<<include>>" .-> viewTemperature
+  viewRealtime -. "<<include>>" .-> viewHumidity
+  viewRealtime -. "<<include>>" .-> viewWaterLevel
+  viewRealtime -. "<<include>>" .-> viewFeedLevel
+  viewRealtime -. "<<extend>>" .-> viewOffline
+  viewAnalytics -. "<<include>>" .-> viewTrends
+  viewAnalytics -. "<<include>>" .-> viewMortalityMetrics
+  viewAnalytics -. "<<include>>" .-> viewDeviceUsage
+
+  manageControls -. "<<include>>" .-> tempAutomation
+  tempAutomation -. "<<include>>" .-> setThresholds
+  manageControls -. "<<include>>" .-> controlFan
+  controlFan -. "<<extend>>" .-> adjustFanSpeed
+  manageControls -. "<<include>>" .-> controlFeeder
+  manageControls -. "<<include>>" .-> controlWater
+  manageControls -. "<<include>>" .-> controlLighting
+  controlLighting -. "<<extend>>" .-> setBrightness
+  manageControls -. "<<include>>" .-> feedingSchedule
+  manageControls -. "<<include>>" .-> waterSchedule
+  manageControls -. "<<include>>" .-> lightingSchedule
+  manageControls -. "<<include>>" .-> toggleDevices
+  manageControls -. "<<extend>>" .-> removeDevice
+
+  manageReports -. "<<include>>" .-> dailyReport
+  manageReports -. "<<include>>" .-> mortalityReport
+  manageReports -. "<<include>>" .-> deviceReport
+  manageReports -. "<<include>>" .-> maintenanceReport
+  manageReports -. "<<include>>" .-> batchSummary
+  manageReports -. "<<extend>>" .-> exportPdf
+  manageReports -. "<<include>>" .-> recordEvent
+  manageReports -. "<<include>>" .-> recordMaintenance
+  manageReports -. "<<include>>" .-> viewHistory
+
+  manageBatches -. "<<include>>" .-> createBatch
+  manageBatches -. "<<include>>" .-> editBatch
+  manageBatches -. "<<extend>>" .-> deleteBatch
+  manageBatches -. "<<extend>>" .-> updateGrowDay
+  manageMortality -. "<<include>>" .-> recordDeaths
+  manageMortality -. "<<include>>" .-> viewMortalityHistory
+  manageMortality -. "<<include>>" .-> analyzeMortality
+
+  accessSupport -. "<<include>>" .-> helpCenter
+  accessSupport -. "<<include>>" .-> contactSupport
+  accessSupport -. "<<include>>" .-> aboutApp
+  accessSupport -. "<<include>>" .-> policies
+
+  esp32 --> viewRealtime
+  esp32 --> viewHistory
+  firebase --> createAccount
+  firebase --> login
+  firebase --> viewRealtime
+  firebase --> viewHistory
+  firebase --> manageBatches
+  firebase --> manageMortality
+  firebase --> manageReports
+  firebase --> manageControls
+  support_email --> contactSupport
+
+  classDef actor fill:#F4F7FB,stroke:#344054,color:#1F2937,stroke-width:1px
+  classDef system fill:#EEF7F0,stroke:#5B8B65,color:#1F2937,stroke-width:1px
+  classDef usecase fill:#FFF4D8,stroke:#D5A85E,color:#1F2937,stroke-width:1px
+  class user,esp32,support_email actor
+  class firebase actor
+  class createAccount,login,rememberLogin,resetPassword,manageProfile,updateProfile,changePassword,logout,viewAlerts,configureAlerts,markAlerts,receiveAlerts,highTemp,lowTemp,deviceOffline,feedingReminder,waterReminder,lightingReminder,viewMainDashboard,viewBatchDashboard,viewRealtime,viewTemperature,viewHumidity,viewWaterLevel,viewFeedLevel,viewOffline,viewAnalytics,viewTrends,viewMortalityMetrics,viewDeviceUsage,manageControls,tempAutomation,setThresholds,controlFan,adjustFanSpeed,controlFeeder,controlWater,controlLighting,setBrightness,feedingSchedule,waterSchedule,lightingSchedule,toggleDevices,removeDevice,manageReports,dailyReport,mortalityReport,deviceReport,maintenanceReport,batchSummary,exportPdf,recordEvent,recordMaintenance,viewHistory,manageBatches,createBatch,editBatch,deleteBatch,updateGrowDay,manageMortality,recordDeaths,viewMortalityHistory,analyzeMortality,accessSupport,helpCenter,contactSupport,aboutApp,policies usecase

@@ -1,15 +1,11 @@
-import 'dart:convert';
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 
 import '../models/auth_store.dart';
-import '../models/firebase_database_service.dart';
 import '../widgets/settings_back_card.dart';
 import '../widgets/settings_overlay_sheet.dart';
 import '../widgets/user_avatar_content.dart';
 
-class ContactSupportScreen extends StatefulWidget {
+class ContactSupportScreen extends StatelessWidget {
   const ContactSupportScreen({super.key});
 
   static Future<void> show(BuildContext context) {
@@ -19,222 +15,36 @@ class ContactSupportScreen extends StatefulWidget {
   }
 
   @override
-  State<ContactSupportScreen> createState() => _ContactSupportScreenState();
-}
-
-class _ContactSupportScreenState extends State<ContactSupportScreen> {
-  static const String _supportEmailAddress = 'chickfillet6996@gmail.com';
-
-  final TextEditingController _subjectController = TextEditingController();
-  final TextEditingController _messageController = TextEditingController();
-  final HttpClient _httpClient = HttpClient()
-    ..connectionTimeout = const Duration(seconds: 15);
-  bool _isSending = false;
-
-  @override
-  void dispose() {
-    _httpClient.close(force: true);
-    _subjectController.dispose();
-    _messageController.dispose();
-    super.dispose();
-  }
-
-  Future<void> _sendMessage() async {
-    final subject = _subjectController.text.trim();
-    final message = _messageController.text.trim();
-
-    if (subject.isEmpty || message.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Please enter both subject and message.'),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-      return;
-    }
-
-    final user = AuthStore.instance.currentUser;
-    final senderName = user?.fullName.trim().isNotEmpty == true
-        ? user!.fullName.trim()
-        : 'Unknown user';
-    final senderEmail = user?.emailAddress.trim().isNotEmpty == true
-        ? user!.emailAddress.trim()
-        : 'No email provided';
-    final senderPhone = user?.phoneNumber.trim().isNotEmpty == true
-        ? user!.phoneNumber.trim()
-        : 'No phone provided';
-    final emailBody =
-        '''
-Support request from: $senderName
-Email: $senderEmail
-Phone: $senderPhone
-
-$message
-''';
-    final ticketId = 'ticket_${DateTime.now().millisecondsSinceEpoch}';
-    final createdAt = DateTime.now().toUtc().toIso8601String();
-    final supportTicket = <String, dynamic>{
-      'ticket_id': ticketId,
-      'subject': subject,
-      'message': message,
-      'created_at': createdAt,
-      'status': 'open',
-      'user_id': user?.id ?? '',
-      'full_name': senderName,
-      'email_address': senderEmail,
-      'phone_number': senderPhone,
-    };
-
-    setState(() {
-      _isSending = true;
-    });
-
-    try {
-      await FirebaseDatabaseService.instance.put(
-        'support_tickets/$ticketId.json',
-        supportTicket,
-      );
-
-      var emailSubmitted = false;
-      try {
-        await _sendSupportEmail(
-          subject: subject,
-          senderName: senderName,
-          senderEmail: senderEmail,
-          senderPhone: senderPhone,
-          emailBody: emailBody,
-        );
-        emailSubmitted = true;
-      } catch (_) {
-        emailSubmitted = false;
-      }
-
-      if (!mounted) {
-        return;
-      }
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            emailSubmitted
-                ? 'Support message saved and email request submitted.'
-                : 'Support message saved. Email needs setup first.',
-          ),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-
-      _subjectController.clear();
-      _messageController.clear();
-    } catch (_) {
-      if (!mounted) {
-        return;
-      }
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Unable to send your message right now.'),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isSending = false;
-        });
-      }
-    }
-  }
-
-  Future<void> _sendSupportEmail({
-    required String subject,
-    required String senderName,
-    required String senderEmail,
-    required String senderPhone,
-    required String emailBody,
-  }) async {
-    final request = await _httpClient.postUrl(
-      Uri.https('formsubmit.co', '/ajax/$_supportEmailAddress'),
-    );
-    request.headers.contentType = ContentType.json;
-    request.headers.set(HttpHeaders.acceptHeader, ContentType.json.mimeType);
-    request.write(
-      jsonEncode({
-        'name': senderName,
-        'email': senderEmail,
-        'phone': senderPhone,
-        'subject': subject,
-        'message': emailBody,
-        '_subject': 'ChickTemp Support: $subject',
-        '_captcha': 'false',
-        '_template': 'table',
-      }),
-    );
-
-    final response = await request.close().timeout(const Duration(seconds: 20));
-    final responseBody = await response.transform(utf8.decoder).join();
-    if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw const SocketException('Support email request failed.');
-    }
-
-    final decoded = jsonDecode(responseBody);
-    if (decoded is Map<String, dynamic> && decoded['success'] == false) {
-      throw const SocketException('Support email request was rejected.');
-    }
-  }
-
-  @override
   Widget build(BuildContext context) {
     return SettingsOverlaySheet(
       headerBand: const _HeaderBand(),
       backgroundPainter: const _LeafLinePainter(),
       child: ListView(
-        padding: const EdgeInsets.fromLTRB(22, 18, 22, 22),
+        padding: const EdgeInsets.fromLTRB(22, 18, 22, 28),
         children: [
           _TopBar(onBack: () => Navigator.of(context).pop()),
-          const SizedBox(height: 30),
-          const _FieldLabel('Subject'),
-          const SizedBox(height: 8),
-          _SupportField(
-            controller: _subjectController,
-            hintText: 'How can we help?',
-          ),
-          const SizedBox(height: 16),
-          const _FieldLabel('Message'),
-          const SizedBox(height: 8),
-          _SupportField(
-            controller: _messageController,
-            hintText: 'Describe your issue...',
-            maxLines: 5,
-          ),
           const SizedBox(height: 24),
-          SizedBox(
-            width: double.infinity,
-            height: 48,
-            child: FilledButton.icon(
-              onPressed: _isSending ? null : _sendMessage,
-              style: FilledButton.styleFrom(
-                backgroundColor: const Color(0xFF0BB13F),
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
-                ),
-              ),
-              icon: _isSending
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                      ),
-                    )
-                  : const Icon(Icons.send_outlined, size: 16),
-              label: Text(
-                _isSending ? 'Sending...' : 'Send Message',
-                style: const TextStyle(fontWeight: FontWeight.w800),
-              ),
-            ),
+          const _SupportIntroCard(),
+          const SizedBox(height: 14),
+          const _ContactInfoCard(
+            icon: Icons.facebook_rounded,
+            label: 'Facebook',
+            value: 'ChickFillet',
+            accentColor: Color(0xFF1877F2),
+          ),
+          const SizedBox(height: 12),
+          const _ContactInfoCard(
+            icon: Icons.email_outlined,
+            label: 'Email',
+            value: 'chickfillet6996@gmail.com',
+            accentColor: Color(0xFF0BB13F),
+          ),
+          const SizedBox(height: 12),
+          const _ContactInfoCard(
+            icon: Icons.phone_outlined,
+            label: 'Phone Number',
+            value: '09500643024',
+            accentColor: Color(0xFF2E7D32),
           ),
         ],
       ),
@@ -253,65 +63,115 @@ class _TopBar extends StatelessWidget {
   }
 }
 
-class _FieldLabel extends StatelessWidget {
-  final String text;
-
-  const _FieldLabel(this.text);
+class _SupportIntroCard extends StatelessWidget {
+  const _SupportIntroCard();
 
   @override
   Widget build(BuildContext context) {
-    return Text(
-      text,
-      style: const TextStyle(
-        color: Color(0xFF455468),
-        fontSize: 13,
-        fontWeight: FontWeight.w700,
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(18, 18, 18, 16),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.78),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: const Color(0xFFDDEBDD)),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF18321C).withOpacity(0.06),
+            blurRadius: 18,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: const Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Reach the ChickTemp team',
+            style: TextStyle(
+              color: Color(0xFF172033),
+              fontSize: 18,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          SizedBox(height: 8),
+          Text(
+            'Use any of the contact details below for help, updates, or support requests.',
+            style: TextStyle(
+              color: Color(0xFF64748B),
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              height: 1.35,
+            ),
+          ),
+        ],
       ),
     );
   }
 }
 
-class _SupportField extends StatelessWidget {
-  final TextEditingController controller;
-  final String hintText;
-  final int maxLines;
+class _ContactInfoCard extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String value;
+  final Color accentColor;
 
-  const _SupportField({
-    required this.controller,
-    required this.hintText,
-    this.maxLines = 1,
+  const _ContactInfoCard({
+    required this.icon,
+    required this.label,
+    required this.value,
+    required this.accentColor,
   });
 
   @override
   Widget build(BuildContext context) {
-    return TextField(
-      controller: controller,
-      maxLines: maxLines,
-      style: const TextStyle(
-        color: Color(0xFF172033),
-        fontSize: 14,
-        fontWeight: FontWeight.w600,
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.72),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: const Color(0xFFE3E9E4)),
       ),
-      decoration: InputDecoration(
-        hintText: hintText,
-        hintStyle: const TextStyle(
-          color: Color(0xFFB0B8C5),
-          fontWeight: FontWeight.w500,
-        ),
-        filled: true,
-        fillColor: Colors.white.withOpacity(0.55),
-        contentPadding: const EdgeInsets.symmetric(
-          horizontal: 14,
-          vertical: 16,
-        ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
-          borderSide: const BorderSide(color: Color(0xFFDCE2E9)),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
-          borderSide: const BorderSide(color: Color(0xFF86D19B)),
-        ),
+      child: Row(
+        children: [
+          Container(
+            width: 42,
+            height: 42,
+            decoration: BoxDecoration(
+              color: accentColor.withOpacity(0.10),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: accentColor.withOpacity(0.18)),
+            ),
+            child: Icon(icon, color: accentColor, size: 22),
+          ),
+          const SizedBox(width: 13),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  style: const TextStyle(
+                    color: Color(0xFF64748B),
+                    fontSize: 11,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 0.4,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  value,
+                  style: const TextStyle(
+                    color: Color(0xFF172033),
+                    fontSize: 15,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -369,7 +229,7 @@ class _HeaderBand extends StatelessWidget {
                   ),
                   SizedBox(height: 6),
                   Text(
-                    'Reach out when you need help from the team',
+                    'Official ChickTemp contact details',
                     style: TextStyle(
                       color: Colors.white70,
                       fontSize: 13,

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'analytics_screen.dart';
 import 'lighting_screen.dart';
@@ -6,6 +7,8 @@ import '../models/auth_store.dart';
 import '../models/device_config_store.dart';
 import '../models/monitoring_store.dart';
 import '../models/temperature_settings_store.dart';
+import '../widgets/chicktemp_loading.dart';
+import '../widgets/control_motion.dart';
 import '../widgets/splash_background.dart';
 import '../widgets/user_avatar_content.dart';
 import 'reports_screen.dart';
@@ -25,15 +28,26 @@ class ControlsScreen extends StatefulWidget {
 }
 
 class _ControlsScreenState extends State<ControlsScreen> {
+  static const double _waterPumpSecondsPerLiter = 20;
+  static const double _feederGramsPerSecond = 40;
+  static const double _minimumFeedGrams = 20;
+  static const double _feederGramStep = 10;
+  static const int _automationOverrideDurationMs = 30 * 60 * 1000;
+
   int _selectedNavIndex = 0;
   bool _ventilationExpanded = false;
   bool _temperatureExpanded = false;
   bool _feederExpanded = false;
   bool _waterExpanded = false;
   bool _lightingExpanded = false;
+  bool _mainFanEnabled = false;
   bool _mainFeederEnabled = false;
+  bool _feederContinuousEnabled = false;
   bool _mainWaterEnabled = false;
+  bool _waterContinuousEnabled = false;
   bool _mainLightEnabled = false;
+  bool _isManualFeedSending = false;
+  bool _isManualWaterSending = false;
   final List<_VentilationDevice> _ventilationDevices = [];
   final List<_FeederDevice> _feederDevices = [];
   final List<WaterDevice> _waterDevices = [];
@@ -46,6 +60,16 @@ class _ControlsScreenState extends State<ControlsScreen> {
   final TextEditingController _minTempController = TextEditingController(text: '28');
   final TextEditingController _maxTempController = TextEditingController(text: '35');
 
+  String? get _controlBusyMessage {
+    if (_isManualFeedSending) {
+      return 'Starting manual feeding...';
+    }
+    if (_isManualWaterSending) {
+      return 'Starting manual watering...';
+    }
+    return null;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -57,7 +81,10 @@ class _ControlsScreenState extends State<ControlsScreen> {
   }
 
   Future<void> _loadTemperatureSettings() async {
-    await TemperatureSettingsStore.instance.loadFor(widget.batchName);
+    await TemperatureSettingsStore.instance.loadFor(
+      widget.batchName,
+      forceRefresh: true,
+    );
     if (!mounted) {
       return;
     }
@@ -85,6 +112,232 @@ class _ControlsScreenState extends State<ControlsScreen> {
     return value % 1 == 0 ? value.toStringAsFixed(0) : value.toStringAsFixed(1);
   }
 
+  String _formatDecimal(double value, {int decimals = 1}) {
+    return value % 1 == 0 ? value.toStringAsFixed(0) : value.toStringAsFixed(decimals);
+  }
+
+  static String _formatStaticDecimal(double value, {int decimals = 1}) {
+    return value % 1 == 0 ? value.toStringAsFixed(0) : value.toStringAsFixed(decimals);
+  }
+
+  static double _normalizeFeedGrams(double grams) {
+    final clamped = grams.clamp(_minimumFeedGrams, 500).toDouble();
+    final stepped = (clamped / _feederGramStep).ceil() * _feederGramStep;
+    return stepped.clamp(_minimumFeedGrams, 500).toDouble();
+  }
+
+  static int _durationMsForFeederGrams(double grams) {
+    return ((grams / _feederGramsPerSecond) * 1000)
+        .round()
+        .clamp(1, 60000)
+        .toInt();
+  }
+
+  static String _durationLabelFromMs(int durationMs) {
+    if (durationMs % 1000 == 0) {
+      return '${durationMs ~/ 1000}s';
+    }
+    return '${(durationMs / 1000).toStringAsFixed(1)}s';
+  }
+
+  String _timeCodeFromLabel(String label) {
+    final timeText = label.split(' - ').first.trim();
+    final match = RegExp(
+      r'^(\d{1,2}):(\d{2})\s*([AaPp][Mm])?$',
+    ).firstMatch(timeText);
+    if (match == null) {
+      return '';
+    }
+
+    var hour = int.tryParse(match.group(1) ?? '') ?? 0;
+    final minute = int.tryParse(match.group(2) ?? '') ?? 0;
+    final period = match.group(3)?.toLowerCase();
+    if (period == 'pm' && hour < 12) {
+      hour += 12;
+    } else if (period == 'am' && hour == 12) {
+      hour = 0;
+    }
+    return '${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}';
+  }
+
+  List<String> _scheduleCodesFromLabels(
+    Iterable<String> labels, {
+    required String amountUnit,
+    double? secondsPerAmount,
+  }) {
+    final codes = <String>[];
+    final amountPattern = RegExp(
+      '([0-9]+(?:\\.[0-9]+)?)\\s*$amountUnit',
+      caseSensitive: false,
+    );
+    final secondsPattern = RegExp(
+      r'([0-9]+(?:\.[0-9]+)?)\s*s',
+      caseSensitive: false,
+    );
+
+    for (final label in labels) {
+      final lower = label.toLowerCase();
+      final active = lower.contains('active') && !lower.contains('inactive');
+      final timeCode = _timeCodeFromLabel(label);
+      final daysMask = ScheduleRepeat.maskFromScheduleLabel(label);
+      final amountMatch = amountPattern.firstMatch(label);
+      final secondsMatch = secondsPattern.firstMatch(label);
+      final amount = double.tryParse(amountMatch?.group(1) ?? '');
+      final savedSeconds = double.tryParse(secondsMatch?.group(1) ?? '');
+      final durationMs = amount != null && secondsPerAmount != null
+          ? (amount * secondsPerAmount * 1000).round()
+          : savedSeconds == null
+              ? null
+              : (savedSeconds * 1000).round();
+      if (timeCode.isEmpty || amount == null || durationMs == null) {
+        continue;
+      }
+      codes.add(
+        '$timeCode|$durationMs|${amount.toStringAsFixed(2)}|${active ? 1 : 0}|$daysMask',
+      );
+    }
+    return codes;
+  }
+
+  List<String> _waterScheduleCodes() {
+    return _scheduleCodesFromLabels(
+      [
+        ..._waterGlobalSchedules,
+        for (final schedules in _waterSchedulesByDeviceId.values) ...schedules,
+      ],
+      amountUnit: 'L',
+    );
+  }
+
+  List<String> _feederScheduleCodes() {
+    return _scheduleCodesFromLabels(
+      [
+        ..._feederGlobalSchedules,
+        for (final schedules in _feederSchedulesByDeviceId.values) ...schedules,
+      ],
+      amountUnit: 'g',
+      secondsPerAmount: 1 / _feederGramsPerSecond,
+    );
+  }
+
+  bool _scheduleActiveFromLabel(String label) {
+    final lower = label.toLowerCase();
+    return lower.contains('active') && !lower.contains('inactive');
+  }
+
+  double _scheduleAmountFromLabel(
+    String label, {
+    required String amountUnit,
+    required double fallback,
+  }) {
+    final match = RegExp(
+      '([0-9]+(?:\\.[0-9]+)?)\\s*$amountUnit',
+      caseSensitive: false,
+    ).firstMatch(label);
+    return double.tryParse(match?.group(1) ?? '') ?? fallback;
+  }
+
+  int _scheduleSecondsFromLabel(String label, {required int fallback}) {
+    final match = RegExp(r'([0-9]+)\s*s', caseSensitive: false).firstMatch(label);
+    return int.tryParse(match?.group(1) ?? '') ?? fallback;
+  }
+
+  String _scheduleAlarmKey(String label) {
+    return '${_timeCodeFromLabel(label)}|${ScheduleRepeat.maskFromScheduleLabel(label)}';
+  }
+
+  bool _hasDuplicateSchedule({
+    required String label,
+    required Iterable<String> schedules,
+    String? ignoredLabel,
+  }) {
+    final key = _scheduleAlarmKey(label);
+    var ignored = false;
+    for (final schedule in schedules) {
+      if (!ignored && ignoredLabel != null && schedule == ignoredLabel) {
+        ignored = true;
+        continue;
+      }
+      if (_scheduleAlarmKey(schedule) == key) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  Iterable<String> _allWaterSchedules() sync* {
+    yield* _waterGlobalSchedules;
+    for (final schedules in _waterSchedulesByDeviceId.values) {
+      yield* schedules;
+    }
+  }
+
+  Iterable<String> _allFeederSchedules() sync* {
+    yield* _feederGlobalSchedules;
+    for (final schedules in _feederSchedulesByDeviceId.values) {
+      yield* schedules;
+    }
+  }
+
+  WaterScheduleDraft _waterDraftFromLabel(String label) {
+    final liters = _scheduleAmountFromLabel(
+      label,
+      amountUnit: 'L',
+      fallback: 1,
+    );
+    return WaterScheduleDraft(
+      time: label.split(' - ').first.trim(),
+      active: _scheduleActiveFromLabel(label),
+      liters: liters,
+      durationSeconds: _scheduleSecondsFromLabel(
+        label,
+        fallback: (liters * _waterPumpSecondsPerLiter).round(),
+      ),
+      daysMask: ScheduleRepeat.maskFromScheduleLabel(label),
+    );
+  }
+
+  _FeederScheduleDraft _feederDraftFromLabel(String label) {
+    final grams = _normalizeFeedGrams(
+      _scheduleAmountFromLabel(
+        label,
+        amountUnit: 'g',
+        fallback: _minimumFeedGrams,
+      ),
+    );
+    return _FeederScheduleDraft(
+      time: label.split(' - ').first.trim(),
+      active: _scheduleActiveFromLabel(label),
+      grams: grams,
+      durationMs: _durationMsForFeederGrams(grams),
+      daysMask: ScheduleRepeat.maskFromScheduleLabel(label),
+    );
+  }
+
+  String _waterScheduleLabel(WaterScheduleDraft draft) {
+    final liters = _formatDecimal(draft.liters);
+    final repeat = ScheduleRepeat.labelForMask(draft.daysMask);
+    return '${draft.time} - $repeat - $liters L - ${draft.durationSeconds}s - ${draft.active ? 'Active' : 'Inactive'}';
+  }
+
+  String _feederScheduleLabel(_FeederScheduleDraft draft) {
+    final grams = _formatDecimal(draft.grams);
+    final repeat = ScheduleRepeat.labelForMask(draft.daysMask);
+    return '${draft.time} - $repeat - $grams g - ${_durationLabelFromMs(draft.durationMs)} - ${draft.active ? 'Active' : 'Inactive'}';
+  }
+
+  String _normalizedWaterScheduleLabel(String label) {
+    return _waterScheduleLabel(_waterDraftFromLabel(label));
+  }
+
+  String _normalizedFeederScheduleLabel(String label) {
+    return _feederScheduleLabel(_feederDraftFromLabel(label));
+  }
+
+  int _esp32SafeCommandId() {
+    return DateTime.now().millisecondsSinceEpoch.remainder(1000000000);
+  }
+
   String _temperatureStatusLabel(TemperatureCondition condition) {
     switch (condition) {
       case TemperatureCondition.low:
@@ -107,11 +360,11 @@ class _ControlsScreenState extends State<ControlsScreen> {
       case TemperatureCondition.normal:
         return const Color(0xFF24B26A);
       case TemperatureCondition.noSensor:
-        return const Color(0xFF6B7280);
+        return const Color(0xFFE53935);
     }
   }
 
-  void _saveTemperatureSettings() {
+  Future<void> _saveTemperatureSettings() async {
     final minTemperature = double.tryParse(_minTempController.text.trim());
     final maxTemperature = double.tryParse(_maxTempController.text.trim());
 
@@ -140,6 +393,27 @@ class _ControlsScreenState extends State<ControlsScreen> {
       minTemperature: minTemperature,
       maxTemperature: maxTemperature,
     );
+
+    try {
+      await DeviceConfigStore.instance.saveTemperatureAutomationControl(
+        batchName: widget.batchName,
+        minTemperature: minTemperature,
+        maxTemperature: maxTemperature,
+      );
+    } on Object {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Saved locally, but Firebase automation was not updated.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+    if (!mounted) {
+      return;
+    }
 
     setState(() {
       _minTempController.text = _formatTemperatureInput(minTemperature);
@@ -183,62 +457,89 @@ class _ControlsScreenState extends State<ControlsScreen> {
     _persistLightingConfig();
   }
 
-  Future<void> _openAddVentilationDeviceSheet() async {
-    final result = await showModalBottomSheet<_VentilationDevice>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (_) => const _AddVentilationDeviceSheet(),
-    );
-
-    if (!mounted || result == null) {
-      return;
-    }
-
-    setState(() {
-      _ventilationDevices.insert(0, result);
-      _ventilationExpanded = true;
-    });
-    _persistVentilationConfig();
-  }
-
-  Future<void> _openAddFeederDeviceSheet() async {
-    final result = await showModalBottomSheet<_FeederDevice>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (_) => const _AddFeederDeviceSheet(),
-    );
-
-    if (!mounted || result == null) {
-      return;
-    }
-
-    setState(() {
-      _feederDevices.insert(0, result);
-      _feederExpanded = true;
-    });
-    _persistFeederConfig();
-  }
-
-  Future<void> _openAddFeederScheduleSheet({String? deviceId}) async {
+  Future<void> _openAddFeederScheduleSheet({
+    String? deviceId,
+    int? scheduleIndex,
+  }) async {
+    final existingSchedule = scheduleIndex == null
+        ? null
+        : deviceId == null
+            ? (scheduleIndex >= 0 && scheduleIndex < _feederGlobalSchedules.length
+                ? _feederGlobalSchedules[scheduleIndex]
+                : null)
+            : (_feederSchedulesByDeviceId[deviceId] != null &&
+                    scheduleIndex >= 0 &&
+                    scheduleIndex < _feederSchedulesByDeviceId[deviceId]!.length
+                ? _feederSchedulesByDeviceId[deviceId]![scheduleIndex]
+                : null);
     final result = await showModalBottomSheet<_FeederScheduleDraft>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => const _AddFeederScheduleSheet(),
+      builder: (_) => _AddFeederScheduleSheet(
+        initialDraft:
+            existingSchedule == null ? null : _feederDraftFromLabel(existingSchedule),
+      ),
     );
 
     if (!mounted || result == null) {
       return;
     }
 
+    final label = _feederScheduleLabel(result);
+    if (_hasDuplicateSchedule(
+      label: label,
+      schedules: _allFeederSchedules(),
+      ignoredLabel: existingSchedule,
+    )) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('That feeding schedule already exists.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
     setState(() {
-      final label = '${result.time} - ${result.active ? 'Active' : 'Inactive'}';
       if (deviceId == null) {
-        _feederGlobalSchedules.insert(0, label);
+        if (scheduleIndex != null &&
+            scheduleIndex >= 0 &&
+            scheduleIndex < _feederGlobalSchedules.length) {
+          _feederGlobalSchedules[scheduleIndex] = label;
+        } else {
+          _feederGlobalSchedules.insert(0, label);
+        }
       } else {
-        _feederSchedulesByDeviceId.putIfAbsent(deviceId, () => []).insert(0, label);
+        final schedules = _feederSchedulesByDeviceId.putIfAbsent(
+          deviceId,
+          () => [],
+        );
+        if (scheduleIndex != null &&
+            scheduleIndex >= 0 &&
+            scheduleIndex < schedules.length) {
+          schedules[scheduleIndex] = label;
+        } else {
+          schedules.insert(0, label);
+        }
+      }
+    });
+    _persistFeederConfig();
+  }
+
+  void _deleteFeederSchedule({String? deviceId, required int scheduleIndex}) {
+    setState(() {
+      if (deviceId == null) {
+        if (scheduleIndex >= 0 && scheduleIndex < _feederGlobalSchedules.length) {
+          _feederGlobalSchedules.removeAt(scheduleIndex);
+        }
+      } else {
+        final schedules = _feederSchedulesByDeviceId[deviceId];
+        if (schedules != null &&
+            scheduleIndex >= 0 &&
+            scheduleIndex < schedules.length) {
+          schedules.removeAt(scheduleIndex);
+        }
       }
     });
     _persistFeederConfig();
@@ -251,6 +552,26 @@ class _ControlsScreenState extends State<ControlsScreen> {
       _loadSavedWaterConfig(),
       _loadSavedLightingConfig(),
     ]);
+  }
+
+  Future<void> _refreshControls() async {
+    try {
+      await Future.wait([
+        _loadTemperatureSettings(),
+        _loadSavedDeviceConfigs(),
+      ]);
+      MonitoringStore.instance.start();
+    } on Object catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not refresh controls: $error'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
   }
 
   Future<void> _loadSavedVentilationConfig() async {
@@ -271,6 +592,7 @@ class _ControlsScreenState extends State<ControlsScreen> {
         _ventilationDevices
           ..clear()
           ..addAll(savedDevices);
+        _mainFanEnabled = data['main_enabled'] == true;
         _ventilationExpanded = data['expanded'] as bool? ?? _ventilationExpanded;
       });
     } on Object catch (_) {
@@ -293,7 +615,7 @@ class _ControlsScreenState extends State<ControlsScreen> {
           .toList();
       final savedGlobalSchedules =
           (data['global_schedules'] as List<dynamic>? ?? const [])
-              .map((entry) => entry.toString())
+              .map((entry) => _normalizedFeederScheduleLabel(entry.toString()))
               .toList();
       final savedDeviceSchedules = <String, List<String>>{};
       final rawDeviceSchedules = data['device_schedules'];
@@ -301,7 +623,7 @@ class _ControlsScreenState extends State<ControlsScreen> {
         for (final entry in rawDeviceSchedules.entries) {
           savedDeviceSchedules[entry.key] =
               (entry.value as List<dynamic>? ?? const [])
-                  .map((item) => item.toString())
+                  .map((item) => _normalizedFeederScheduleLabel(item.toString()))
                   .toList();
         }
       }
@@ -317,6 +639,7 @@ class _ControlsScreenState extends State<ControlsScreen> {
           ..clear()
           ..addAll(savedDeviceSchedules);
         _mainFeederEnabled = data['main_enabled'] == true;
+        _feederContinuousEnabled = data['continuous_enabled'] == true;
         _feederExpanded = data['expanded'] as bool? ?? _feederExpanded;
       });
     } on Object catch (_) {
@@ -324,16 +647,33 @@ class _ControlsScreenState extends State<ControlsScreen> {
     }
   }
 
-  Future<void> _persistVentilationConfig() async {
+  Future<void> _persistVentilationConfig({
+    bool? controlEnabledOverride,
+    int? manualOverrideDurationMs,
+    bool? manualOverrideCancel,
+  }) async {
     try {
       await DeviceConfigStore.instance.saveVentilationConfig(
         batchName: widget.batchName,
         data: {
+          'main_enabled': _mainFanEnabled,
           'expanded': _ventilationExpanded,
           'devices': _ventilationDevices
               .map((device) => device.toJson())
               .toList(),
         },
+      );
+      await DeviceConfigStore.instance.saveVentilationFanControl(
+        batchName: widget.batchName,
+        enabled: controlEnabledOverride ??
+            (_mainFanEnabled ||
+                _ventilationDevices.any((device) => device.enabled)),
+        manualOverrideDurationMs: manualOverrideDurationMs,
+        manualOverrideCancel: manualOverrideCancel,
+        commandId:
+            manualOverrideDurationMs != null || manualOverrideCancel != null
+            ? _esp32SafeCommandId()
+            : null,
       );
     } on Object catch (_) {
       // Ignore transient save failures in the controls UI.
@@ -346,6 +686,7 @@ class _ControlsScreenState extends State<ControlsScreen> {
         batchName: widget.batchName,
         data: {
           'main_enabled': _mainFeederEnabled,
+          'continuous_enabled': _feederContinuousEnabled,
           'expanded': _feederExpanded,
           'devices': _feederDevices.map((device) => device.toJson()).toList(),
           'global_schedules': List<String>.from(_feederGlobalSchedules),
@@ -354,6 +695,12 @@ class _ControlsScreenState extends State<ControlsScreen> {
               entry.key: List<String>.from(entry.value),
           },
         },
+      );
+      await DeviceConfigStore.instance.saveFeederServoControl(
+        batchName: widget.batchName,
+        enabled: _mainFeederEnabled && _feederContinuousEnabled,
+        schedulesEnabled: _mainFeederEnabled,
+        scheduleCodes: _feederScheduleCodes(),
       );
     } on Object catch (_) {
       // Ignore transient save failures in the controls UI.
@@ -375,7 +722,7 @@ class _ControlsScreenState extends State<ControlsScreen> {
           .toList();
       final savedGlobalSchedules =
           (data['global_schedules'] as List<dynamic>? ?? const [])
-              .map((entry) => entry.toString())
+              .map((entry) => _normalizedWaterScheduleLabel(entry.toString()))
               .toList();
       final savedDeviceSchedules = <String, List<String>>{};
       final rawDeviceSchedules = data['device_schedules'];
@@ -383,7 +730,7 @@ class _ControlsScreenState extends State<ControlsScreen> {
         for (final entry in rawDeviceSchedules.entries) {
           savedDeviceSchedules[entry.key] =
               (entry.value as List<dynamic>? ?? const [])
-                  .map((item) => item.toString())
+                  .map((item) => _normalizedWaterScheduleLabel(item.toString()))
                   .toList();
         }
       }
@@ -399,6 +746,7 @@ class _ControlsScreenState extends State<ControlsScreen> {
           ..clear()
           ..addAll(savedDeviceSchedules);
         _mainWaterEnabled = data['main_enabled'] == true;
+        _waterContinuousEnabled = data['continuous_enabled'] == true;
         _waterExpanded = data['expanded'] as bool? ?? _waterExpanded;
       });
     } on Object catch (_) {}
@@ -410,6 +758,7 @@ class _ControlsScreenState extends State<ControlsScreen> {
         batchName: widget.batchName,
         data: {
           'main_enabled': _mainWaterEnabled,
+          'continuous_enabled': _waterContinuousEnabled,
           'expanded': _waterExpanded,
           'devices': _waterDevices.map((device) => device.toJson()).toList(),
           'global_schedules': List<String>.from(_waterGlobalSchedules),
@@ -421,7 +770,9 @@ class _ControlsScreenState extends State<ControlsScreen> {
       );
       await DeviceConfigStore.instance.saveWaterPumpControl(
         batchName: widget.batchName,
-        enabled: _mainWaterEnabled,
+        enabled: _mainWaterEnabled && _waterContinuousEnabled,
+        schedulesEnabled: _mainWaterEnabled,
+        scheduleCodes: _waterScheduleCodes(),
       );
     } on Object catch (_) {}
   }
@@ -463,7 +814,11 @@ class _ControlsScreenState extends State<ControlsScreen> {
     } on Object catch (_) {}
   }
 
-  Future<void> _persistLightingConfig() async {
+  Future<void> _persistLightingConfig({
+    bool? controlEnabledOverride,
+    int? manualOverrideDurationMs,
+    bool? manualOverrideCancel,
+  }) async {
     try {
       await DeviceConfigStore.instance.saveLightingConfig(
         batchName: widget.batchName,
@@ -481,71 +836,246 @@ class _ControlsScreenState extends State<ControlsScreen> {
       );
       await DeviceConfigStore.instance.saveLightBulbControl(
         batchName: widget.batchName,
-        enabled:
-            _mainLightEnabled || _lightingDevices.any((device) => device.enabled),
+        enabled: controlEnabledOverride ??
+            (_mainLightEnabled ||
+                _lightingDevices.any((device) => device.enabled)),
+        manualOverrideDurationMs: manualOverrideDurationMs,
+        manualOverrideCancel: manualOverrideCancel,
+        commandId:
+            manualOverrideDurationMs != null || manualOverrideCancel != null
+            ? _esp32SafeCommandId()
+            : null,
       );
     } on Object catch (_) {}
   }
 
-  Future<void> _openAddWaterDeviceSheet() async {
-    final result = await showModalBottomSheet<WaterDevice>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (_) => const AddWaterDeviceSheet(),
-    );
-
-    if (!mounted || result == null) {
-      return;
-    }
-
-    setState(() {
-      _waterDevices.insert(0, result);
-      _waterExpanded = true;
-    });
-    _persistWaterConfig();
-  }
-
-  Future<void> _openAddWaterScheduleSheet({String? deviceId}) async {
+  Future<void> _openAddWaterScheduleSheet({
+    String? deviceId,
+    int? scheduleIndex,
+  }) async {
+    final existingSchedule = scheduleIndex == null
+        ? null
+        : deviceId == null
+            ? (scheduleIndex >= 0 && scheduleIndex < _waterGlobalSchedules.length
+                ? _waterGlobalSchedules[scheduleIndex]
+                : null)
+            : (_waterSchedulesByDeviceId[deviceId] != null &&
+                    scheduleIndex >= 0 &&
+                    scheduleIndex < _waterSchedulesByDeviceId[deviceId]!.length
+                ? _waterSchedulesByDeviceId[deviceId]![scheduleIndex]
+                : null);
     final result = await showModalBottomSheet<WaterScheduleDraft>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => const AddWaterScheduleSheet(),
+      builder: (_) => AddWaterScheduleSheet(
+        initialDraft:
+            existingSchedule == null ? null : _waterDraftFromLabel(existingSchedule),
+      ),
     );
 
     if (!mounted || result == null) {
       return;
     }
 
+    final label = _waterScheduleLabel(result);
+    if (_hasDuplicateSchedule(
+      label: label,
+      schedules: _allWaterSchedules(),
+      ignoredLabel: existingSchedule,
+    )) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('That water schedule already exists.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
     setState(() {
-      final label = '${result.time} - ${result.active ? 'Active' : 'Inactive'}';
       if (deviceId == null) {
-        _waterGlobalSchedules.insert(0, label);
+        if (scheduleIndex != null &&
+            scheduleIndex >= 0 &&
+            scheduleIndex < _waterGlobalSchedules.length) {
+          _waterGlobalSchedules[scheduleIndex] = label;
+        } else {
+          _waterGlobalSchedules.insert(0, label);
+        }
       } else {
-        _waterSchedulesByDeviceId.putIfAbsent(deviceId, () => []).insert(0, label);
+        final schedules = _waterSchedulesByDeviceId.putIfAbsent(
+          deviceId,
+          () => [],
+        );
+        if (scheduleIndex != null &&
+            scheduleIndex >= 0 &&
+            scheduleIndex < schedules.length) {
+          schedules[scheduleIndex] = label;
+        } else {
+          schedules.insert(0, label);
+        }
       }
     });
     _persistWaterConfig();
   }
 
-  Future<void> _openAddLightingDeviceSheet() async {
-    final result = await showModalBottomSheet<LightingDevice>(
+  void _deleteWaterSchedule({String? deviceId, required int scheduleIndex}) {
+    setState(() {
+      if (deviceId == null) {
+        if (scheduleIndex >= 0 && scheduleIndex < _waterGlobalSchedules.length) {
+          _waterGlobalSchedules.removeAt(scheduleIndex);
+        }
+      } else {
+        final schedules = _waterSchedulesByDeviceId[deviceId];
+        if (schedules != null &&
+            scheduleIndex >= 0 &&
+            scheduleIndex < schedules.length) {
+          schedules.removeAt(scheduleIndex);
+        }
+      }
+    });
+    _persistWaterConfig();
+  }
+
+  Future<void> _openManualWaterSheet() async {
+    if (!_mainWaterEnabled) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Turn on Water Pump Power before manual watering.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
+    final result = await showModalBottomSheet<_AmountCommandDraft>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => const AddLightingDeviceSheet(),
+      builder: (_) => const _AmountCommandSheet(
+        title: 'Manual Watering',
+        amountLabel: 'WATER AMOUNT',
+        unitLabel: 'liters',
+        initialAmount: '1.0',
+        accentColor: Color(0xFF1F5BFF),
+        estimateDescription: 'Estimated pump time',
+        secondsPerUnit: _waterPumpSecondsPerLiter,
+      ),
     );
 
     if (!mounted || result == null) {
       return;
     }
 
-    setState(() {
-      _lightingDevices.insert(0, result);
-      _lightingExpanded = true;
-    });
-    _persistLightingConfig();
+    setState(() => _isManualWaterSending = true);
+    try {
+      await DeviceConfigStore.instance.saveWaterPumpControl(
+        batchName: widget.batchName,
+        enabled: _waterContinuousEnabled,
+        schedulesEnabled: _mainWaterEnabled,
+        liters: result.amount,
+        durationMs: result.durationMs,
+        commandId: _esp32SafeCommandId(),
+        scheduleCodes: _waterScheduleCodes(),
+      );
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Watering ${_formatDecimal(result.amount)} L for ${result.durationLabel}',
+          ),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } on Object catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not start manual watering: $error'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _isManualWaterSending = false);
+      }
+    }
+  }
+
+  Future<void> _openManualFeedSheet() async {
+    if (!_mainFeederEnabled) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Turn on Feeder Power before manual feeding.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
+    final result = await showModalBottomSheet<_AmountCommandDraft>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => const _AmountCommandSheet(
+        title: 'Manual Feeding',
+        amountLabel: 'FEED AMOUNT',
+        unitLabel: 'grams',
+        initialAmount: '20',
+        accentColor: Color(0xFFF57C00),
+        estimateDescription: 'Estimated gate-open time',
+        secondsPerUnit: 1 / _feederGramsPerSecond,
+        minAmount: _minimumFeedGrams,
+        amountStep: _feederGramStep,
+        wholeNumberOnly: true,
+      ),
+    );
+
+    if (!mounted || result == null) {
+      return;
+    }
+
+    setState(() => _isManualFeedSending = true);
+    try {
+      await DeviceConfigStore.instance.saveFeederServoControl(
+        batchName: widget.batchName,
+        enabled: _feederContinuousEnabled,
+        schedulesEnabled: _mainFeederEnabled,
+        grams: result.amount,
+        durationMs: result.durationMs,
+        commandId: _esp32SafeCommandId(),
+        scheduleCodes: _feederScheduleCodes(),
+      );
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Feeding ${_formatDecimal(result.amount)} g for ${result.durationLabel}',
+          ),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } on Object catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not start manual feeding: $error'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _isManualFeedSending = false);
+      }
+    }
   }
 
   Future<void> _openAddLightingScheduleSheet({String? deviceId}) async {
@@ -575,7 +1105,12 @@ class _ControlsScreenState extends State<ControlsScreen> {
       backgroundColor: const Color(0xFFF4F7F3),
       body: SplashBackground(
         child: SafeArea(
-          child: ListView(
+          child: Stack(
+            children: [
+              RefreshIndicator(
+                onRefresh: _refreshControls,
+                child: ListView(
+              physics: const AlwaysScrollableScrollPhysics(),
               padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
               children: [
                 Container(
@@ -704,28 +1239,69 @@ class _ControlsScreenState extends State<ControlsScreen> {
                   ),
                 ),
                 const SizedBox(height: 10),
-                  _VentilationDropdownCard(
-                    expanded: _ventilationExpanded,
-                    devices: _ventilationDevices,
-                  onTapHeader: _toggleVentilation,
-                  onAddDevice: _openAddVentilationDeviceSheet,
-                  onDeleteDevice: (index) {
-                    setState(() {
-                      _ventilationDevices.removeAt(index);
-                    });
-                    _persistVentilationConfig();
-                  },
-                  onToggleDevice: (index, value) {
-                    setState(() {
-                      _ventilationDevices[index] = _ventilationDevices[index].copyWith(enabled: value);
-                    });
-                    _persistVentilationConfig();
-                  },
-                  onSetSpeed: (index, speed) {
-                    setState(() {
-                      _ventilationDevices[index] = _ventilationDevices[index].copyWith(speed: speed);
-                    });
-                    _persistVentilationConfig();
+                AnimatedBuilder(
+                  animation: MonitoringStore.instance,
+                  builder: (context, _) {
+                    final telemetry =
+                        MonitoringStore.instance.snapshotFor(widget.batchName);
+                    final displayedFanEnabled = telemetry.isDeviceLive
+                        ? telemetry.ventilationFanEnabled
+                        : _mainFanEnabled;
+                    return _VentilationDropdownCard(
+                      expanded: _ventilationExpanded,
+                      devices: _ventilationDevices,
+                      masterEnabled: displayedFanEnabled,
+                      overrideActive: telemetry.ventilationFanOverrideActive,
+                      deviceOnline: telemetry.isDeviceLive,
+                      onTapHeader: _toggleVentilation,
+                      onToggleMaster: (value) {
+                        setState(() {
+                          _mainFanEnabled = value;
+                        });
+                        _persistVentilationConfig(
+                          controlEnabledOverride: value,
+                          manualOverrideDurationMs:
+                              _automationOverrideDurationMs,
+                        );
+                      },
+                      onForceStop: () {
+                        setState(() {
+                          _mainFanEnabled = false;
+                        });
+                        _persistVentilationConfig(
+                          controlEnabledOverride: false,
+                          manualOverrideDurationMs:
+                              _automationOverrideDurationMs,
+                        );
+                      },
+                      onResumeAuto: () {
+                        _persistVentilationConfig(manualOverrideCancel: true);
+                      },
+                      onDeleteDevice: (index) {
+                        setState(() {
+                          _ventilationDevices.removeAt(index);
+                        });
+                        _persistVentilationConfig();
+                      },
+                      onToggleDevice: (index, value) {
+                        setState(() {
+                          _ventilationDevices[index] =
+                              _ventilationDevices[index].copyWith(
+                            enabled: value,
+                          );
+                        });
+                        _persistVentilationConfig();
+                      },
+                      onSetSpeed: (index, speed) {
+                        setState(() {
+                          _ventilationDevices[index] =
+                              _ventilationDevices[index].copyWith(
+                            speed: speed,
+                          );
+                        });
+                        _persistVentilationConfig();
+                      },
+                    );
                   },
                 ),
                 const SizedBox(height: 12),
@@ -749,7 +1325,7 @@ class _ControlsScreenState extends State<ControlsScreen> {
                       maxController: _maxTempController,
                       minTemperature: settings.minTemperature,
                       maxTemperature: settings.maxTemperature,
-                      currentTemperatureText: telemetry.isLive
+                      currentTemperatureText: telemetry.temperature > 0
                           ? '${telemetry.temperature.toStringAsFixed(1)}°C'
                           : 'No sensor',
                       currentStatusLabel: _temperatureStatusLabel(condition),
@@ -775,19 +1351,52 @@ class _ControlsScreenState extends State<ControlsScreen> {
                   ),
                 ),
                 const SizedBox(height: 10),
-                _FeederDropdownCard(
+                AnimatedBuilder(
+                  animation: MonitoringStore.instance,
+                  builder: (context, _) {
+                    final telemetry =
+                        MonitoringStore.instance.snapshotFor(widget.batchName);
+                    return _FeederDropdownCard(
                     expanded: _feederExpanded,
                     devices: _feederDevices,
                     masterEnabled: _mainFeederEnabled,
+                    continuousEnabled: _feederContinuousEnabled,
+                    manualFeedBusy: _isManualFeedSending,
+                    feederLevelPercent: telemetry.feederLevelPercent,
+                    feederDistanceCm: telemetry.feederDistanceCm,
+                    feederLevelLive: telemetry.isFeederLevelLive,
                     onTapHeader: _toggleFeeder,
-                    onAddDevice: _openAddFeederDeviceSheet,
                     onAddGlobalSchedule: () => _openAddFeederScheduleSheet(),
                     onAddDeviceSchedule: (index) => _openAddFeederScheduleSheet(
                       deviceId: _feederDevices[index].id,
                     ),
+                    onEditGlobalSchedule: (scheduleIndex) =>
+                        _openAddFeederScheduleSheet(scheduleIndex: scheduleIndex),
+                    onDeleteGlobalSchedule: (scheduleIndex) =>
+                        _deleteFeederSchedule(scheduleIndex: scheduleIndex),
+                    onEditDeviceSchedule: (deviceIndex, scheduleIndex) =>
+                        _openAddFeederScheduleSheet(
+                      deviceId: _feederDevices[deviceIndex].id,
+                      scheduleIndex: scheduleIndex,
+                    ),
+                    onDeleteDeviceSchedule: (deviceIndex, scheduleIndex) =>
+                        _deleteFeederSchedule(
+                      deviceId: _feederDevices[deviceIndex].id,
+                      scheduleIndex: scheduleIndex,
+                    ),
+                    onManualFeed: _openManualFeedSheet,
                     onToggleMaster: (value) {
                       setState(() {
                         _mainFeederEnabled = value;
+                        if (!value) {
+                          _feederContinuousEnabled = false;
+                        }
+                      });
+                      _persistFeederConfig();
+                    },
+                    onToggleContinuous: (value) {
+                      setState(() {
+                        _feederContinuousEnabled = value;
                       });
                       _persistFeederConfig();
                     },
@@ -810,6 +1419,8 @@ class _ControlsScreenState extends State<ControlsScreen> {
                     },
                     globalSchedules: _feederGlobalSchedules,
                     deviceSchedules: _feederSchedulesByDeviceId,
+                    );
+                  },
                 ),
                 const SizedBox(height: 12),
                 AnimatedBuilder(
@@ -821,21 +1432,45 @@ class _ControlsScreenState extends State<ControlsScreen> {
                   expanded: _waterExpanded,
                   devices: _waterDevices,
                   masterEnabled: _mainWaterEnabled,
+                  continuousEnabled: _waterContinuousEnabled,
+                  manualWaterBusy: _isManualWaterSending,
                   waterLevelPercent: telemetry.waterLevelPercent,
                   waterDistanceCm: telemetry.waterDistanceCm,
                   waterLevelLive: telemetry.isWaterLevelLive,
-                  hideDefaultsWhenEmpty:
-                      AuthStore.instance.currentUser?.startsWithEmptyControls ??
-                      false,
+                  hideDefaultsWhenEmpty: false,
                   onTapHeader: _toggleWater,
-                  onAddDevice: _openAddWaterDeviceSheet,
                   onAddGlobalSchedule: () => _openAddWaterScheduleSheet(),
                   onAddDeviceSchedule: (index) => _openAddWaterScheduleSheet(
                     deviceId: _waterDevices[index].id,
                   ),
+                  onEditGlobalSchedule: (scheduleIndex) =>
+                      _openAddWaterScheduleSheet(scheduleIndex: scheduleIndex),
+                  onDeleteGlobalSchedule: (scheduleIndex) => _deleteWaterSchedule(
+                    scheduleIndex: scheduleIndex,
+                  ),
+                  onEditDeviceSchedule: (deviceIndex, scheduleIndex) =>
+                      _openAddWaterScheduleSheet(
+                    deviceId: _waterDevices[deviceIndex].id,
+                    scheduleIndex: scheduleIndex,
+                  ),
+                  onDeleteDeviceSchedule: (deviceIndex, scheduleIndex) =>
+                      _deleteWaterSchedule(
+                    deviceId: _waterDevices[deviceIndex].id,
+                    scheduleIndex: scheduleIndex,
+                  ),
+                  onManualWater: _openManualWaterSheet,
                   onToggleMaster: (value) {
                     setState(() {
                       _mainWaterEnabled = value;
+                      if (!value) {
+                        _waterContinuousEnabled = false;
+                      }
+                    });
+                    _persistWaterConfig();
+                  },
+                  onToggleContinuous: (value) {
+                    setState(() {
+                      _waterContinuousEnabled = value;
                     });
                     _persistWaterConfig();
                   },
@@ -860,46 +1495,87 @@ class _ControlsScreenState extends State<ControlsScreen> {
                   },
                 ),
                 const SizedBox(height: 12),
-                LightingSystemDropdownCard(
-                  expanded: _lightingExpanded,
-                  devices: _lightingDevices,
-                  masterEnabled: _mainLightEnabled,
-                  onTapHeader: _toggleLighting,
-                  onAddDevice: _openAddLightingDeviceSheet,
-                  onToggleMaster: (value) {
-                    setState(() {
-                      _mainLightEnabled = value;
-                    });
-                    _persistLightingConfig();
+                AnimatedBuilder(
+                  animation: MonitoringStore.instance,
+                  builder: (context, _) {
+                    final telemetry =
+                        MonitoringStore.instance.snapshotFor(widget.batchName);
+                    final displayedLightEnabled = telemetry.isDeviceLive
+                        ? telemetry.lightBulbEnabled
+                        : _mainLightEnabled;
+                    return LightingSystemDropdownCard(
+                      expanded: _lightingExpanded,
+                      devices: _lightingDevices,
+                      masterEnabled: displayedLightEnabled,
+                      overrideActive: telemetry.lightBulbOverrideActive,
+                      deviceOnline: telemetry.isDeviceLive,
+                      onTapHeader: _toggleLighting,
+                      onToggleMaster: (value) {
+                        setState(() {
+                          _mainLightEnabled = value;
+                        });
+                        _persistLightingConfig(
+                          controlEnabledOverride: value,
+                          manualOverrideDurationMs:
+                              _automationOverrideDurationMs,
+                        );
+                      },
+                      onForceStop: () {
+                        setState(() {
+                          _mainLightEnabled = false;
+                        });
+                        _persistLightingConfig(
+                          controlEnabledOverride: false,
+                          manualOverrideDurationMs:
+                              _automationOverrideDurationMs,
+                        );
+                      },
+                      onResumeAuto: () {
+                        _persistLightingConfig(manualOverrideCancel: true);
+                      },
+                      onAddSchedule: (index) => _openAddLightingScheduleSheet(
+                        deviceId: _lightingDevices[index].id,
+                      ),
+                      onDeleteDevice: (index) {
+                        setState(() {
+                          if (index >= 0 && index < _lightingDevices.length) {
+                            final removedDevice =
+                                _lightingDevices.removeAt(index);
+                            _lightingSchedulesByDeviceId
+                                .remove(removedDevice.id);
+                          }
+                        });
+                        _persistLightingConfig();
+                      },
+                      onToggleDevice: (index, value) {
+                        setState(() {
+                          _lightingDevices[index] =
+                              _lightingDevices[index].copyWith(enabled: value);
+                        });
+                        _persistLightingConfig();
+                      },
+                      onSetBrightness: (index, brightness) {
+                        setState(() {
+                          _lightingDevices[index] = _lightingDevices[index]
+                              .copyWith(brightness: brightness);
+                        });
+                        _persistLightingConfig();
+                      },
+                      deviceSchedules: _lightingSchedulesByDeviceId,
+                    );
                   },
-                  onAddSchedule: (index) => _openAddLightingScheduleSheet(
-                    deviceId: _lightingDevices[index].id,
-                  ),
-                  onDeleteDevice: (index) {
-                    setState(() {
-                      if (index >= 0 && index < _lightingDevices.length) {
-                        final removedDevice = _lightingDevices.removeAt(index);
-                        _lightingSchedulesByDeviceId.remove(removedDevice.id);
-                      }
-                    });
-                    _persistLightingConfig();
-                  },
-                  onToggleDevice: (index, value) {
-                    setState(() {
-                      _lightingDevices[index] = _lightingDevices[index].copyWith(enabled: value);
-                    });
-                    _persistLightingConfig();
-                  },
-                  onSetBrightness: (index, brightness) {
-                    setState(() {
-                      _lightingDevices[index] = _lightingDevices[index].copyWith(brightness: brightness);
-                    });
-                    _persistLightingConfig();
-                  },
-                  deviceSchedules: _lightingSchedulesByDeviceId,
                 ),
                 const SizedBox(height: 120),
               ],
+                ),
+              ),
+              Positioned(
+                left: 20,
+                right: 20,
+                bottom: 104,
+                child: _ControlBusyOverlay(message: _controlBusyMessage),
+              ),
+            ],
           ),
         ),
       ),
@@ -967,6 +1643,79 @@ class _ControlsScreenState extends State<ControlsScreen> {
   }
 }
 
+class _ControlBusyOverlay extends StatelessWidget {
+  final String? message;
+
+  const _ControlBusyOverlay({required this.message});
+
+  @override
+  Widget build(BuildContext context) {
+    return IgnorePointer(
+      ignoring: message == null,
+      child: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 160),
+        switchInCurve: Curves.easeOutCubic,
+        switchOutCurve: Curves.easeInCubic,
+        transitionBuilder: (child, animation) {
+          return FadeTransition(
+            opacity: animation,
+            child: SlideTransition(
+              position: Tween<Offset>(
+                begin: const Offset(0, 0.12),
+                end: Offset.zero,
+              ).animate(animation),
+              child: child,
+            ),
+          );
+        },
+        child: message == null
+            ? const SizedBox.shrink(key: ValueKey('idle'))
+            : DecoratedBox(
+                key: ValueKey(message),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.94),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: const Color(0xFFDDEBDD)),
+                  boxShadow: [
+                    BoxShadow(
+                      color: const Color(0xFF18321C).withOpacity(0.10),
+                      blurRadius: 18,
+                      offset: const Offset(0, 8),
+                    ),
+                  ],
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 12,
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const ChickTempLoading.compact(
+                        size: 24,
+                        color: Color(0xFF0BB13F),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          message!,
+                          style: const TextStyle(
+                            color: Color(0xFF233047),
+                            fontSize: 12,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+      ),
+    );
+  }
+}
+
 class _TemperatureDropdownCard extends StatelessWidget {
   final bool expanded;
   final TextEditingController minController;
@@ -977,7 +1726,7 @@ class _TemperatureDropdownCard extends StatelessWidget {
   final String currentStatusLabel;
   final Color currentStatusColor;
   final VoidCallback onTapHeader;
-  final VoidCallback onSave;
+  final Future<void> Function() onSave;
   final VoidCallback onTempChanged;
 
   const _TemperatureDropdownCard({
@@ -1064,10 +1813,9 @@ class _TemperatureDropdownCard extends StatelessWidget {
               ),
             ),
           ),
-          AnimatedCrossFade(
-            duration: const Duration(milliseconds: 220),
-            crossFadeState: expanded ? CrossFadeState.showFirst : CrossFadeState.showSecond,
-            firstChild: Padding(
+          ControlReveal(
+            expanded: expanded,
+            child: Padding(
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
               child: Container(
                 width: double.infinity,
@@ -1122,7 +1870,9 @@ class _TemperatureDropdownCard extends StatelessWidget {
                       width: double.infinity,
                       height: 50,
                       child: FilledButton.icon(
-                        onPressed: onSave,
+                        onPressed: () {
+                          onSave();
+                        },
                         style: FilledButton.styleFrom(
                           backgroundColor: const Color(0xFFF21414),
                           foregroundColor: Colors.white,
@@ -1142,7 +1892,6 @@ class _TemperatureDropdownCard extends StatelessWidget {
                 ),
               ),
             ),
-            secondChild: const SizedBox.shrink(),
           ),
         ],
       ),
@@ -1154,11 +1903,21 @@ class _FeederDropdownCard extends StatelessWidget {
   final bool expanded;
   final List<_FeederDevice> devices;
   final bool masterEnabled;
+  final bool continuousEnabled;
+  final bool manualFeedBusy;
+  final double feederLevelPercent;
+  final double feederDistanceCm;
+  final bool feederLevelLive;
   final VoidCallback onTapHeader;
-  final VoidCallback onAddDevice;
   final VoidCallback onAddGlobalSchedule;
   final void Function(int index) onAddDeviceSchedule;
+  final void Function(int scheduleIndex) onEditGlobalSchedule;
+  final void Function(int scheduleIndex) onDeleteGlobalSchedule;
+  final void Function(int deviceIndex, int scheduleIndex) onEditDeviceSchedule;
+  final void Function(int deviceIndex, int scheduleIndex) onDeleteDeviceSchedule;
+  final VoidCallback onManualFeed;
   final ValueChanged<bool> onToggleMaster;
+  final ValueChanged<bool> onToggleContinuous;
   final ValueChanged<int> onDeleteDevice;
   final void Function(int index, bool value) onToggleDevice;
   final List<String> globalSchedules;
@@ -1168,11 +1927,21 @@ class _FeederDropdownCard extends StatelessWidget {
     required this.expanded,
     required this.devices,
     required this.masterEnabled,
+    required this.continuousEnabled,
+    required this.manualFeedBusy,
+    required this.feederLevelPercent,
+    required this.feederDistanceCm,
+    required this.feederLevelLive,
     required this.onTapHeader,
-    required this.onAddDevice,
     required this.onAddGlobalSchedule,
     required this.onAddDeviceSchedule,
+    required this.onEditGlobalSchedule,
+    required this.onDeleteGlobalSchedule,
+    required this.onEditDeviceSchedule,
+    required this.onDeleteDeviceSchedule,
+    required this.onManualFeed,
     required this.onToggleMaster,
+    required this.onToggleContinuous,
     required this.onDeleteDevice,
     required this.onToggleDevice,
     required this.globalSchedules,
@@ -1184,8 +1953,7 @@ class _FeederDropdownCard extends StatelessWidget {
     final hasDevice = devices.isNotEmpty;
     final headerColor = hasDevice ? const Color(0xFFFCEFD9) : const Color(0xFFF8E7D0);
     final iconColor = const Color(0xFFF57C00);
-    final subtitle =
-        hasDevice ? '${devices.length} Device${devices.length == 1 ? '' : 's'} Connected' : 'No Devices';
+    final subtitle = feederLevelLive ? 'Online' : 'Offline';
 
     return Container(
       decoration: BoxDecoration(
@@ -1255,16 +2023,25 @@ class _FeederDropdownCard extends StatelessWidget {
               ),
             ),
           ),
-          AnimatedCrossFade(
-            duration: const Duration(milliseconds: 220),
-            crossFadeState: expanded ? CrossFadeState.showFirst : CrossFadeState.showSecond,
-            firstChild: Padding(
+          ControlReveal(
+            expanded: expanded,
+            child: Padding(
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
               child: Column(
                 children: [
                   _FeederControlCard(
-                    enabled: masterEnabled,
-                    onChanged: onToggleMaster,
+                    powerEnabled: masterEnabled,
+                    continuousEnabled: continuousEnabled,
+                    manualFeedBusy: manualFeedBusy,
+                    onPowerChanged: onToggleMaster,
+                    onContinuousChanged: onToggleContinuous,
+                    onManualFeed: onManualFeed,
+                  ),
+                  const SizedBox(height: 12),
+                  _FeederLevelCard(
+                    levelPercent: feederLevelPercent,
+                    distanceCm: feederDistanceCm,
+                    isLive: feederLevelLive,
                   ),
                   const SizedBox(height: 12),
                   _FeederScheduleCard(
@@ -1273,6 +2050,8 @@ class _FeederDropdownCard extends StatelessWidget {
                     schedules: globalSchedules,
                     emptyText: 'No global schedule set',
                     onAddSchedule: onAddGlobalSchedule,
+                    onEditSchedule: onEditGlobalSchedule,
+                    onDeleteSchedule: onDeleteGlobalSchedule,
                   ),
                   const SizedBox(height: 12),
                   if (hasDevice)
@@ -1297,63 +2076,147 @@ class _FeederDropdownCard extends StatelessWidget {
                               schedules: schedules,
                               emptyText: 'No feeding schedule set for this device',
                               onAddSchedule: () => onAddDeviceSchedule(index),
+                              onEditSchedule: (scheduleIndex) =>
+                                  onEditDeviceSchedule(index, scheduleIndex),
+                              onDeleteSchedule: (scheduleIndex) =>
+                                  onDeleteDeviceSchedule(index, scheduleIndex),
                             ),
                           ],
                         ),
                       );
-                    })
-                  else
-                    _EmptyFeederPlaceholder(),
-                  const SizedBox(height: 12),
-                  SizedBox(
-                    width: double.infinity,
-                    height: 48,
-                    child: OutlinedButton.icon(
-                      onPressed: onAddDevice,
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: const Color(0xFF8B5A1A),
-                        side: const BorderSide(color: Color(0xFFF0E0C7)),
-                        backgroundColor: const Color(0xFFFFF6EA),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(16),
-                        ),
-                      ),
-                      icon: const Icon(Icons.add, size: 18),
-                      label: const Text(
-                        'Add Auto Feeder Lines Device',
-                        style: TextStyle(fontWeight: FontWeight.w700),
-                      ),
-                    ),
-                  ),
+                    }),
                 ],
               ),
             ),
-            secondChild: const SizedBox.shrink(),
           ),
         ],
       ),
     );
   }
 }
+class _FeederLevelCard extends StatelessWidget {
+  final double levelPercent;
+  final double distanceCm;
+  final bool isLive;
 
-class _FeederControlCard extends StatelessWidget {
-  final bool enabled;
-  final ValueChanged<bool> onChanged;
-
-  const _FeederControlCard({
-    required this.enabled,
-    required this.onChanged,
+  const _FeederLevelCard({
+    required this.levelPercent,
+    required this.distanceCm,
+    required this.isLive,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Container(
+    final hasReading = isLive;
+    final level = hasReading ? levelPercent.clamp(0, 100).toDouble() : 0.0;
+    final levelColor = level <= 20
+        ? const Color(0xFFE5484D)
+        : level <= 45
+            ? const Color(0xFFF59E0B)
+            : const Color(0xFFF57C00);
+
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 160),
+      curve: Curves.easeOutCubic,
       width: double.infinity,
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: hasReading ? const Color(0xFFFFFCF7) : Colors.white,
         borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: const Color(0xFFE3E9E4)),
+        border: Border.all(
+          color: hasReading
+              ? const Color(0xFFFFD6A7)
+              : const Color(0xFFE3E9E4),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.sensors, color: Color(0xFFF57C00), size: 20),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Text(
+                  'HC-SR04 FEEDER LEVEL',
+                  style: TextStyle(
+                    color: Color(0xFF233047),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 0.3,
+                  ),
+                ),
+              ),
+              Text(
+                hasReading ? '${level.toStringAsFixed(0)}%' : 'NO READING',
+                style: TextStyle(
+                  color: hasReading ? levelColor : const Color(0xFF93A0B6),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(999),
+            child: LinearProgressIndicator(
+              value: level / 100,
+              minHeight: 12,
+              backgroundColor: const Color(0xFFE8EFF2),
+              valueColor: AlwaysStoppedAnimation<Color>(levelColor),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            hasReading
+                ? '${distanceCm.toStringAsFixed(1)} cm between sensor and feed surface'
+                : 'Waiting for the ultrasonic sensor',
+            style: const TextStyle(
+              color: Color(0xFF93A0B6),
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+class _FeederControlCard extends StatelessWidget {
+  final bool powerEnabled;
+  final bool continuousEnabled;
+  final bool manualFeedBusy;
+  final ValueChanged<bool> onPowerChanged;
+  final ValueChanged<bool> onContinuousChanged;
+  final VoidCallback onManualFeed;
+
+  const _FeederControlCard({
+    required this.powerEnabled,
+    required this.continuousEnabled,
+    required this.manualFeedBusy,
+    required this.onPowerChanged,
+    required this.onContinuousChanged,
+    required this.onManualFeed,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final continuousActive = powerEnabled && continuousEnabled;
+
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 160),
+      curve: Curves.easeOutCubic,
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: powerEnabled ? const Color(0xFFFFFCF7) : Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: powerEnabled
+              ? const Color(0xFFFFD6A7)
+              : const Color(0xFFE3E9E4),
+        ),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withOpacity(0.04),
@@ -1362,50 +2225,146 @@ class _FeederControlCard extends StatelessWidget {
           ),
         ],
       ),
-      child: Row(
+      child: Column(
         children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+          Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: const [
+                    Text(
+                      'SG90 Feeder Servo',
+                      style: TextStyle(
+                        color: Color(0xFF233047),
+                        fontSize: 15,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    SizedBox(height: 6),
+                    Text(
+                      'Signal on GPIO 33.\nOpens the feeder gate by timed portions.',
+                      style: TextStyle(
+                        color: Color(0xFF93A0B6),
+                        fontSize: 10,
+                        fontWeight: FontWeight.w800,
+                        height: 1.2,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 10),
+              ControlAnimatedStatus(
+                text: powerEnabled ? 'ON' : 'OFF',
+                style: TextStyle(
+                  color: powerEnabled
+                      ? const Color(0xFF24B26A)
+                      : const Color(0xFF93A0B6),
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Switch(
+                value: powerEnabled,
+                onChanged: onPowerChanged,
+                activeColor: const Color(0xFF24B26A),
+                activeTrackColor: const Color(0xFFB9EBC9),
+                inactiveThumbColor: Colors.white,
+                inactiveTrackColor: const Color(0xFFD9E4D9),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 160),
+            curve: Curves.easeOutCubic,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: continuousActive
+                  ? const Color(0xFFFFF2DD)
+                  : const Color(0xFFFFF8ED),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: const Color(0xFFFFE0B8)),
+            ),
+            child: Row(
               children: [
-                const Text(
-                  'Main Feeder Control',
-                  style: TextStyle(
-                    color: Color(0xFF233047),
-                    fontSize: 15,
-                    fontWeight: FontWeight.w800,
+                const Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Continuous Gate',
+                        style: TextStyle(
+                          color: Color(0xFF7A3B00),
+                          fontSize: 12,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      SizedBox(height: 4),
+                      Text(
+                        'Keeps the feeder gate open until turned off.',
+                        style: TextStyle(
+                          color: Color(0xFF9A6A3A),
+                          fontSize: 10,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-                const SizedBox(height: 6),
-                const Text(
-                  'Master trigger inactive -\nIndividual controls still active',
+                const SizedBox(width: 8),
+                ControlAnimatedStatus(
+                  text: continuousActive ? 'OPEN' : 'CLOSED',
                   style: TextStyle(
-                    color: Color(0xFF93A0B6),
+                    color: continuousActive
+                        ? const Color(0xFFF57C00)
+                        : const Color(0xFF93A0B6),
                     fontSize: 10,
-                    fontWeight: FontWeight.w800,
-                    height: 1.2,
+                    fontWeight: FontWeight.w900,
                   ),
+                ),
+                const SizedBox(width: 8),
+                Switch(
+                  value: continuousActive,
+                  onChanged: powerEnabled ? onContinuousChanged : null,
+                  activeColor: const Color(0xFFF57C00),
+                  activeTrackColor: const Color(0xFFFFD6A7),
+                  inactiveThumbColor: Colors.white,
+                  inactiveTrackColor: const Color(0xFFE6DED2),
                 ),
               ],
             ),
           ),
-          const SizedBox(width: 10),
-          Text(
-            enabled ? 'ON' : 'OFF',
-            style: TextStyle(
-              color: enabled ? Color(0xFF24B26A) : Color(0xFF93A0B6),
-              fontSize: 11,
-              fontWeight: FontWeight.w800,
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            height: 42,
+            child: OutlinedButton.icon(
+              onPressed: powerEnabled && !manualFeedBusy ? onManualFeed : null,
+              style: OutlinedButton.styleFrom(
+                foregroundColor: const Color(0xFFF57C00),
+                disabledForegroundColor: const Color(0xFF98A2B3),
+                side: const BorderSide(color: Color(0xFFFFD0A6)),
+                backgroundColor: powerEnabled
+                    ? const Color(0xFFFFF6EA)
+                    : const Color(0xFFF4F5F7),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
+                ),
+              ),
+              icon: manualFeedBusy
+                  ? const ChickTempLoading.compact(
+                      size: 18,
+                      color: Color(0xFFF57C00),
+                    )
+                  : const Icon(Icons.restaurant_rounded, size: 17),
+              label: Text(
+                manualFeedBusy ? 'Starting Feed...' : 'Manual Feed by Grams',
+                style: const TextStyle(fontWeight: FontWeight.w800),
+              ),
             ),
-          ),
-          const SizedBox(width: 8),
-          Switch(
-            value: enabled,
-            onChanged: onChanged,
-            activeColor: const Color(0xFF24B26A),
-            activeTrackColor: const Color(0xFFB9EBC9),
-            inactiveThumbColor: Colors.white,
-            inactiveTrackColor: const Color(0xFFD9E4D9),
           ),
         ],
       ),
@@ -1419,6 +2378,8 @@ class _FeederScheduleCard extends StatelessWidget {
   final List<String> schedules;
   final String emptyText;
   final VoidCallback onAddSchedule;
+  final void Function(int scheduleIndex) onEditSchedule;
+  final void Function(int scheduleIndex) onDeleteSchedule;
 
   const _FeederScheduleCard({
     required this.title,
@@ -1426,6 +2387,8 @@ class _FeederScheduleCard extends StatelessWidget {
     required this.schedules,
     required this.emptyText,
     required this.onAddSchedule,
+    required this.onEditSchedule,
+    required this.onDeleteSchedule,
   });
 
   @override
@@ -1503,9 +2466,11 @@ class _FeederScheduleCard extends StatelessWidget {
             )
           else
             Column(
-              children: schedules
-                  .map(
-                    (schedule) => Padding(
+              children: List.generate(
+                schedules.length,
+                (index) {
+                  final schedule = schedules[index];
+                  return Padding(
                       padding: const EdgeInsets.only(bottom: 8),
                       child: Container(
                         width: double.infinity,
@@ -1514,18 +2479,44 @@ class _FeederScheduleCard extends StatelessWidget {
                           color: const Color(0xFFF8FAFD),
                           borderRadius: BorderRadius.circular(14),
                         ),
-                        child: Text(
-                          schedule,
-                          style: const TextStyle(
-                            color: Color(0xFF5E6B7F),
-                            fontSize: 12,
-                            fontWeight: FontWeight.w700,
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                schedule,
+                                style: const TextStyle(
+                                  color: Color(0xFF5E6B7F),
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ),
+                            IconButton(
+                              onPressed: () => onEditSchedule(index),
+                              icon: const Icon(
+                                Icons.edit_outlined,
+                                size: 17,
+                                color: Color(0xFF7E8DA3),
+                              ),
+                              visualDensity: VisualDensity.compact,
+                              tooltip: 'Edit schedule',
+                            ),
+                            IconButton(
+                              onPressed: () => onDeleteSchedule(index),
+                              icon: const Icon(
+                                Icons.delete_outline,
+                                size: 17,
+                                color: Color(0xFFE36A6A),
+                              ),
+                              visualDensity: VisualDensity.compact,
+                              tooltip: 'Delete schedule',
+                            ),
+                          ],
                           ),
-                        ),
                       ),
-                    ),
-                  )
-                  .toList(),
+                    );
+                },
+              ),
             ),
         ],
       ),
@@ -1621,164 +2612,233 @@ class _FeederDeviceCard extends StatelessWidget {
     );
   }
 }
+class _AmountCommandDraft {
+  final double amount;
+  final int durationMs;
 
-class _EmptyFeederPlaceholder extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      height: 44,
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        color: const Color(0xFFF8FAFD),
-        borderRadius: BorderRadius.circular(14),
-      ),
-      child: const Text(
-        'No devices added yet',
-        style: TextStyle(
-          color: Color(0xFF9AA8BD),
-          fontSize: 12,
-          fontWeight: FontWeight.w700,
-        ),
-      ),
-    );
+  const _AmountCommandDraft({
+    required this.amount,
+    required this.durationMs,
+  });
+
+  String get durationLabel {
+    return _ControlsScreenState._durationLabelFromMs(durationMs);
   }
 }
 
-class _AddFeederDeviceSheet extends StatefulWidget {
-  const _AddFeederDeviceSheet();
+class _AmountCommandSheet extends StatefulWidget {
+  final String title;
+  final String amountLabel;
+  final String unitLabel;
+  final String initialAmount;
+  final Color accentColor;
+  final String estimateDescription;
+  final double secondsPerUnit;
+  final double minAmount;
+  final double? amountStep;
+  final bool wholeNumberOnly;
+
+  const _AmountCommandSheet({
+    required this.title,
+    required this.amountLabel,
+    required this.unitLabel,
+    required this.initialAmount,
+    required this.accentColor,
+    required this.estimateDescription,
+    required this.secondsPerUnit,
+    this.minAmount = 0,
+    this.amountStep,
+    this.wholeNumberOnly = false,
+  });
 
   @override
-  State<_AddFeederDeviceSheet> createState() => _AddFeederDeviceSheetState();
+  State<_AmountCommandSheet> createState() => _AmountCommandSheetState();
 }
 
-class _AddFeederDeviceSheetState extends State<_AddFeederDeviceSheet> {
-  final TextEditingController _nameController = TextEditingController();
-  final TextEditingController _idController = TextEditingController();
-  final TextEditingController _typeController = TextEditingController(text: 'Feeder');
-  final TextEditingController _descriptionController = TextEditingController();
+class _AmountCommandSheetState extends State<_AmountCommandSheet> {
+  late final TextEditingController _amountController;
+
+  @override
+  void initState() {
+    super.initState();
+    _amountController = TextEditingController(text: widget.initialAmount);
+  }
 
   @override
   void dispose() {
-    _nameController.dispose();
-    _idController.dispose();
-    _typeController.dispose();
-    _descriptionController.dispose();
+    _amountController.dispose();
     super.dispose();
   }
 
-  void _save() {
+  int get _durationMs {
+    final amount = double.tryParse(_amountController.text.trim()) ?? 0;
+    final effectiveAmount = amount < widget.minAmount ? widget.minAmount : amount;
+    return (effectiveAmount * widget.secondsPerUnit * 1000)
+        .round()
+        .clamp(1, 300000)
+        .toInt();
+  }
+
+  String get _durationLabel {
+    return _ControlsScreenState._durationLabelFromMs(_durationMs);
+  }
+
+  bool _isValidStep(double amount) {
+    final step = widget.amountStep;
+    if (step == null || step <= 0) {
+      return true;
+    }
+    final multiplier = amount / step;
+    return (multiplier - multiplier.round()).abs() < 0.000001;
+  }
+
+  void _run() {
+    final amount = double.tryParse(_amountController.text.trim());
+    if (amount == null || amount <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Enter a valid amount in ${widget.unitLabel}.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+    if (amount < widget.minAmount) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Minimum is ${_ControlsScreenState._formatStaticDecimal(widget.minAmount)} ${widget.unitLabel}.',
+          ),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+    if (!_isValidStep(amount)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Use 10-gram steps only: 20, 30, 40, and so on.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
     Navigator.of(context).pop(
-      _FeederDevice(
-        name: _nameController.text.trim().isNotEmpty ? _nameController.text.trim() : 'Auto Feeder 1',
-        id: _idController.text.trim().isNotEmpty ? _idController.text.trim() : 'FED001',
-        type: _typeController.text.trim().isNotEmpty ? _typeController.text.trim() : 'Feeder',
-        description: _descriptionController.text.trim(),
-        enabled: true,
+      _AmountCommandDraft(
+        amount: amount,
+        durationMs: (amount * widget.secondsPerUnit * 1000)
+            .round()
+            .clamp(1, 300000)
+            .toInt(),
       ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    final bottomInset = MediaQuery.of(context).viewInsets.bottom;
-    final maxHeight = MediaQuery.of(context).size.height * 0.72;
-    return SafeArea(
-      top: false,
-      child: Padding(
-        padding: EdgeInsets.only(bottom: bottomInset),
-        child: Align(
-          alignment: Alignment.bottomCenter,
-          child: ConstrainedBox(
-            constraints: BoxConstraints(maxHeight: maxHeight),
-            child: Container(
-              padding: const EdgeInsets.fromLTRB(18, 14, 18, 16),
-              decoration: const BoxDecoration(
-                color: Color(0xFFF7FCF8),
-                borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-              ),
-              child: SingleChildScrollView(
-                keyboardDismissBehavior:
-                    ScrollViewKeyboardDismissBehavior.onDrag,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                Row(
-                  children: [
-                    const Expanded(
-                      child: Text(
-                        'Add New Device',
-                        style: TextStyle(
-                          color: Color(0xFF1F2937),
-                          fontSize: 22,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                    ),
-                    InkWell(
-                      onTap: () => Navigator.of(context).pop(),
-                      borderRadius: BorderRadius.circular(999),
-                      splashColor: const Color(0xFF0BB13F).withOpacity(0.14),
-                      highlightColor: const Color(0xFF0BB13F).withOpacity(0.10),
-                      hoverColor: const Color(0xFF0BB13F).withOpacity(0.08),
-                      child: Container(
-                        width: 34,
-                        height: 34,
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(999),
-                          border: Border.all(color: const Color(0xFFDCE5DD)),
-                        ),
-                        child: const Icon(Icons.close_rounded, size: 18, color: Color(0xFF64748B)),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 14),
-                const _SheetLabel('DEVICE NAME'),
-                const SizedBox(height: 6),
-                _SheetTextField(controller: _nameController, hintText: 'e.g. Ventilation Fan 2'),
-                const SizedBox(height: 10),
-                const _SheetLabel('DEVICE ID'),
-                const SizedBox(height: 6),
-                _SheetTextField(controller: _idController, hintText: 'e.g. FAN002'),
-                const SizedBox(height: 10),
-                const _SheetLabel('DEVICE TYPE'),
-                const SizedBox(height: 6),
-                _SheetTextField(controller: _typeController, hintText: 'Feeder'),
-                const SizedBox(height: 10),
-                const _SheetLabel('DESCRIPTION (OPTIONAL)'),
-                const SizedBox(height: 6),
-                _SheetTextField(
-                  controller: _descriptionController,
-                  hintText: 'Enter device details...',
-                  maxLines: 3,
-                ),
-                const SizedBox(height: 12),
-                SizedBox(
-                  width: double.infinity,
-                  height: 52,
-                  child: FilledButton(
-                    onPressed: _save,
-                    style: FilledButton.styleFrom(
-                      backgroundColor: const Color(0xFF0BB13F),
-                      foregroundColor: Colors.white,
-                      elevation: 0,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                    ),
-                    child: const Text(
-                      'Save Device',
-                      style: TextStyle(fontWeight: FontWeight.w800),
+    return FractionallySizedBox(
+      heightFactor: 0.42,
+      alignment: Alignment.bottomCenter,
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(18, 14, 18, 16),
+        decoration: const BoxDecoration(
+          color: Color(0xFFF7FCF8),
+          borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    widget.title,
+                    style: const TextStyle(
+                      color: Color(0xFF1F2937),
+                      fontSize: 22,
+                      fontWeight: FontWeight.w800,
                     ),
                   ),
                 ),
-                  ],
+                InkWell(
+                  onTap: () => Navigator.of(context).pop(),
+                  borderRadius: BorderRadius.circular(999),
+                  child: Container(
+                    width: 34,
+                    height: 34,
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(color: const Color(0xFFDCE5DD)),
+                    ),
+                    child: const Icon(
+                      Icons.close_rounded,
+                      size: 18,
+                      color: Color(0xFF64748B),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 18),
+            _SheetLabel(widget.amountLabel),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _amountController,
+              keyboardType: widget.wholeNumberOnly
+                  ? TextInputType.number
+                  : const TextInputType.numberWithOptions(decimal: true),
+              inputFormatters: widget.wholeNumberOnly
+                  ? [FilteringTextInputFormatter.digitsOnly]
+                  : null,
+              onChanged: (_) => setState(() {}),
+              decoration: InputDecoration(
+                suffixText: widget.unitLabel,
+                helperText:
+                    '${widget.estimateDescription}: $_durationLabel',
+                filled: true,
+                fillColor: Colors.white,
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 12,
+                ),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide: const BorderSide(color: Color(0xFFDCE4EE)),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide: const BorderSide(color: Color(0xFFDCE4EE)),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide: BorderSide(color: widget.accentColor),
                 ),
               ),
             ),
-          ),
+            const Spacer(),
+            SizedBox(
+              width: double.infinity,
+              height: 52,
+              child: FilledButton.icon(
+                onPressed: _run,
+                style: FilledButton.styleFrom(
+                  backgroundColor: widget.accentColor,
+                  foregroundColor: Colors.white,
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                ),
+                icon: const Icon(Icons.play_arrow_rounded, size: 20),
+                label: const Text(
+                  'Run Now',
+                  style: TextStyle(fontWeight: FontWeight.w800),
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -1788,23 +2848,88 @@ class _AddFeederDeviceSheetState extends State<_AddFeederDeviceSheet> {
 class _FeederScheduleDraft {
   final String time;
   final bool active;
+  final double grams;
+  final int durationMs;
+  final int daysMask;
 
   const _FeederScheduleDraft({
     required this.time,
     required this.active,
+    required this.grams,
+    required this.durationMs,
+    this.daysMask = ScheduleRepeat.allDaysMask,
   });
 }
 
 class _AddFeederScheduleSheet extends StatefulWidget {
-  const _AddFeederScheduleSheet();
+  final _FeederScheduleDraft? initialDraft;
+
+  const _AddFeederScheduleSheet({this.initialDraft});
 
   @override
   State<_AddFeederScheduleSheet> createState() => _AddFeederScheduleSheetState();
 }
 
 class _AddFeederScheduleSheetState extends State<_AddFeederScheduleSheet> {
-  bool _active = true;
-  TimeOfDay _selectedTime = const TimeOfDay(hour: 6, minute: 0);
+  late bool _active;
+  late TimeOfDay _selectedTime;
+  late int _daysMask;
+  late final TextEditingController _gramsController;
+
+  @override
+  void initState() {
+    super.initState();
+    final initialDraft = widget.initialDraft;
+    _active = initialDraft?.active ?? true;
+    _selectedTime = _parseTimeOfDay(initialDraft?.time) ??
+        const TimeOfDay(hour: 6, minute: 0);
+    _daysMask = initialDraft?.daysMask ?? ScheduleRepeat.allDaysMask;
+    _gramsController = TextEditingController(
+      text: initialDraft == null
+          ? '20'
+          : _ControlsScreenState._formatStaticDecimal(initialDraft.grams),
+    );
+  }
+
+  TimeOfDay? _parseTimeOfDay(String? value) {
+    if (value == null || value.isEmpty) {
+      return null;
+    }
+    final match = RegExp(
+      r'^(\d{1,2}):(\d{2})\s*([AaPp][Mm])?$',
+    ).firstMatch(value.trim());
+    if (match == null) {
+      return null;
+    }
+    var hour = int.tryParse(match.group(1) ?? '') ?? 0;
+    final minute = int.tryParse(match.group(2) ?? '') ?? 0;
+    final period = match.group(3)?.toLowerCase();
+    if (period == 'pm' && hour < 12) {
+      hour += 12;
+    } else if (period == 'am' && hour == 12) {
+      hour = 0;
+    }
+    return TimeOfDay(hour: hour, minute: minute);
+  }
+
+  @override
+  void dispose() {
+    _gramsController.dispose();
+    super.dispose();
+  }
+
+  int get _durationMs {
+    final grams = double.tryParse(_gramsController.text.trim()) ?? 20;
+    return _ControlsScreenState._durationMsForFeederGrams(
+      grams
+          .clamp(_ControlsScreenState._minimumFeedGrams, 500)
+          .toDouble(),
+    );
+  }
+
+  String get _durationLabel {
+    return _ControlsScreenState._durationLabelFromMs(_durationMs);
+  }
 
   Future<void> _pickTime() async {
     final picked = await showTimePicker(
@@ -1820,15 +2945,50 @@ class _AddFeederScheduleSheetState extends State<_AddFeederScheduleSheet> {
   }
 
   void _save() {
+    final grams = double.tryParse(_gramsController.text.trim());
+    if (_daysMask <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Choose at least one repeat day.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+    if (grams == null || grams < _ControlsScreenState._minimumFeedGrams) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Minimum feed amount is 20 grams.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+    if (grams % _ControlsScreenState._feederGramStep != 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Use 10-gram steps only: 20, 30, 40, and so on.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
     Navigator.of(context).pop(
-      _FeederScheduleDraft(time: _selectedTime.format(context), active: _active),
+      _FeederScheduleDraft(
+        time: _selectedTime.format(context),
+        active: _active,
+        grams: grams,
+        durationMs: _ControlsScreenState._durationMsForFeederGrams(grams),
+        daysMask: _daysMask,
+      ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
     return FractionallySizedBox(
-      heightFactor: 0.45,
+      heightFactor: 0.72,
       alignment: Alignment.bottomCenter,
       child: Container(
         padding: const EdgeInsets.fromLTRB(18, 14, 18, 16),
@@ -1841,9 +3001,11 @@ class _AddFeederScheduleSheetState extends State<_AddFeederScheduleSheet> {
           children: [
             Row(
               children: [
-                const Expanded(
+                Expanded(
                   child: Text(
-                    'Add Feeding Schedule',
+                    widget.initialDraft == null
+                        ? 'Add Feeding Schedule'
+                        : 'Edit Feeding Schedule',
                     style: TextStyle(
                       color: Color(0xFF1F2937),
                       fontSize: 22,
@@ -1887,6 +3049,45 @@ class _AddFeederScheduleSheetState extends State<_AddFeederScheduleSheet> {
               onTap: _pickTime,
             ),
             const SizedBox(height: 14),
+            const _SheetLabel('REPEAT DAYS'),
+            const SizedBox(height: 8),
+            ScheduleDaySelector(
+              selectedMask: _daysMask,
+              onChanged: (mask) => setState(() => _daysMask = mask),
+            ),
+            const SizedBox(height: 14),
+            const _SheetLabel('FEED AMOUNT'),
+            const SizedBox(height: 6),
+            TextField(
+              controller: _gramsController,
+              keyboardType: TextInputType.number,
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+              onChanged: (_) => setState(() {}),
+              decoration: InputDecoration(
+                suffixText: 'grams',
+                helperText:
+                    'Minimum 20g, then 10g steps. Estimated gate-open time: $_durationLabel',
+                filled: true,
+                fillColor: Colors.white,
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 12,
+                ),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide: const BorderSide(color: Color(0xFFDCE4EE)),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide: const BorderSide(color: Color(0xFFDCE4EE)),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide: const BorderSide(color: Color(0xFFA8E7B8)),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
             const _SheetLabel('STATUS'),
             const SizedBox(height: 8),
             Row(
@@ -2081,11 +3282,178 @@ class _TempInputBox extends StatelessWidget {
   }
 }
 
+class _VentilationRelayControlCard extends StatelessWidget {
+  final bool enabled;
+  final bool overrideActive;
+  final ValueChanged<bool> onChanged;
+  final VoidCallback onForceStop;
+  final VoidCallback onResumeAuto;
+
+  const _VentilationRelayControlCard({
+    required this.enabled,
+    required this.overrideActive,
+    required this.onChanged,
+    required this.onForceStop,
+    required this.onResumeAuto,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 160),
+      curve: Curves.easeOutCubic,
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: enabled ? const Color(0xFFF8FFFA) : Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: enabled
+              ? const Color(0xFFB9EBC9)
+              : const Color(0xFFE3E9E4),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      '5V Ventilation Fan Relay',
+                      style: TextStyle(
+                        color: Color(0xFF233047),
+                        fontSize: 15,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    const Text(
+                      'Controls relay K3 / IN3.\nFan uses the separate 5V supply.',
+                      style: TextStyle(
+                        color: Color(0xFF93A0B6),
+                        fontSize: 10,
+                        fontWeight: FontWeight.w800,
+                        height: 1.2,
+                      ),
+                    ),
+                    if (overrideActive) ...[
+                      const SizedBox(height: 6),
+                      const Text(
+                        'Manual override active',
+                        style: TextStyle(
+                          color: Color(0xFFB45309),
+                          fontSize: 10,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              const SizedBox(width: 10),
+              ControlAnimatedStatus(
+                text: enabled ? 'ON' : 'OFF',
+                style: TextStyle(
+                  color: enabled
+                      ? const Color(0xFF24B26A)
+                      : const Color(0xFF93A0B6),
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Switch(
+                value: enabled,
+                onChanged: onChanged,
+                activeColor: const Color(0xFF24B26A),
+                activeTrackColor: const Color(0xFFB9EBC9),
+                inactiveThumbColor: Colors.white,
+                inactiveTrackColor: const Color(0xFFD9E4D9),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          ControlActionSwitcher(
+            child: overrideActive
+                ? SizedBox(
+                    key: const ValueKey('ventilation-resume-auto'),
+              width: double.infinity,
+              height: 40,
+              child: FilledButton.icon(
+                onPressed: onResumeAuto,
+                style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFF2E7D32),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                ),
+                icon: const Icon(Icons.autorenew_rounded, size: 17),
+                label: const Text('Resume Temperature Auto'),
+              ),
+            )
+                : enabled
+                    ? SizedBox(
+                        key: const ValueKey('ventilation-force-stop'),
+              width: double.infinity,
+              height: 40,
+              child: OutlinedButton.icon(
+                onPressed: onForceStop,
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFFB42318),
+                  side: const BorderSide(color: Color(0xFFF1C6C2)),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                ),
+                icon: const Icon(Icons.power_settings_new_rounded, size: 17),
+                label: const Text('Force Stop for 30 Minutes'),
+              ),
+            )
+                    : Container(
+                        key: const ValueKey('ventilation-ready'),
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF4FAF5),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: const Color(0xFFDDEBDD)),
+              ),
+              child: const Text(
+                'Auto mode is ready. The switch creates a 30-minute manual override.',
+                style: TextStyle(
+                  color: Color(0xFF607268),
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _VentilationDropdownCard extends StatelessWidget {
   final bool expanded;
   final List<_VentilationDevice> devices;
+  final bool masterEnabled;
+  final bool overrideActive;
+  final bool deviceOnline;
   final VoidCallback onTapHeader;
-  final VoidCallback onAddDevice;
+  final ValueChanged<bool> onToggleMaster;
+  final VoidCallback onForceStop;
+  final VoidCallback onResumeAuto;
   final ValueChanged<int> onDeleteDevice;
   final void Function(int index, bool value) onToggleDevice;
   final void Function(int index, int speed) onSetSpeed;
@@ -2093,8 +3461,13 @@ class _VentilationDropdownCard extends StatelessWidget {
   const _VentilationDropdownCard({
     required this.expanded,
     required this.devices,
+    required this.masterEnabled,
+    required this.overrideActive,
+    required this.deviceOnline,
     required this.onTapHeader,
-    required this.onAddDevice,
+    required this.onToggleMaster,
+    required this.onForceStop,
+    required this.onResumeAuto,
     required this.onDeleteDevice,
     required this.onToggleDevice,
     required this.onSetSpeed,
@@ -2102,8 +3475,7 @@ class _VentilationDropdownCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final subtitle =
-        devices.isEmpty ? 'No Devices' : '${devices.length} Device${devices.length == 1 ? '' : 's'} Connected';
+    final subtitle = deviceOnline ? 'Online' : 'Offline';
 
     return Container(
       decoration: BoxDecoration(
@@ -2148,7 +3520,7 @@ class _VentilationDropdownCard extends StatelessWidget {
                         Text(
                           subtitle,
                           style: const TextStyle(
-                            color: Color(0xFF314236),
+                            color: Color(0xFF0B8F39),
                             fontSize: 13,
                             fontWeight: FontWeight.w700,
                           ),
@@ -2173,16 +3545,21 @@ class _VentilationDropdownCard extends StatelessWidget {
               ),
             ),
           ),
-          AnimatedCrossFade(
-            duration: const Duration(milliseconds: 220),
-            crossFadeState: expanded ? CrossFadeState.showFirst : CrossFadeState.showSecond,
-            firstChild: Padding(
+          ControlReveal(
+            expanded: expanded,
+            child: Padding(
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
               child: Column(
                 children: [
-                  if (devices.isEmpty)
-                    _emptyState()
-                  else
+                  _VentilationRelayControlCard(
+                    enabled: masterEnabled,
+                    overrideActive: overrideActive,
+                    onChanged: onToggleMaster,
+                    onForceStop: onForceStop,
+                    onResumeAuto: onResumeAuto,
+                  ),
+                  const SizedBox(height: 12),
+                  if (devices.isNotEmpty)
                     Column(
                       children: List.generate(devices.length, (index) {
                         final device = devices[index];
@@ -2198,54 +3575,11 @@ class _VentilationDropdownCard extends StatelessWidget {
                         );
                       }),
                     ),
-                  const SizedBox(height: 14),
-                  SizedBox(
-                    width: double.infinity,
-                    height: 48,
-                    child: OutlinedButton.icon(
-                      onPressed: onAddDevice,
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: const Color(0xFF355C79),
-                        side: const BorderSide(color: Color(0xFFDDE7E0)),
-                        backgroundColor: const Color(0xFFF3FBF5),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(16),
-                        ),
-                      ),
-                      icon: const Icon(Icons.add, size: 18),
-                      label: const Text(
-                        'Add Ventilation Fans Device',
-                        style: TextStyle(fontWeight: FontWeight.w700),
-                      ),
-                    ),
-                  ),
                 ],
               ),
             ),
-            secondChild: const SizedBox.shrink(),
           ),
         ],
-      ),
-    );
-  }
-
-  Widget _emptyState() {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(vertical: 18),
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: const Color(0xFFE5ECE7)),
-      ),
-      child: const Text(
-        'No devices added yet',
-        style: TextStyle(
-          color: Color(0xFF9AA8BD),
-          fontSize: 13,
-          fontWeight: FontWeight.w700,
-        ),
       ),
     );
   }
@@ -2312,8 +3646,8 @@ class _VentilationDropdownCard extends StatelessWidget {
               constraints: const BoxConstraints.tightFor(width: 28, height: 28),
             ),
             const SizedBox(width: 4),
-            Text(
-              device.enabled ? 'ON' : 'OFF',
+            ControlAnimatedStatus(
+              text: device.enabled ? 'ON' : 'OFF',
               style: TextStyle(
                 color: device.enabled ? const Color(0xFF24B26A) : const Color(0xFF8A96AC),
                 fontSize: 11,
@@ -2537,146 +3871,6 @@ class _SpeedButton extends StatelessWidget {
   }
 }
 
-class _AddVentilationDeviceSheet extends StatefulWidget {
-  const _AddVentilationDeviceSheet();
-
-  @override
-  State<_AddVentilationDeviceSheet> createState() => _AddVentilationDeviceSheetState();
-}
-
-class _AddVentilationDeviceSheetState extends State<_AddVentilationDeviceSheet> {
-  final TextEditingController _nameController = TextEditingController();
-  final TextEditingController _idController = TextEditingController();
-  final TextEditingController _typeController = TextEditingController(text: 'Fan');
-  final TextEditingController _descriptionController = TextEditingController();
-
-  @override
-  void dispose() {
-    _nameController.dispose();
-    _idController.dispose();
-    _typeController.dispose();
-    _descriptionController.dispose();
-    super.dispose();
-  }
-
-  void _save() {
-    final name = _nameController.text.trim().isNotEmpty ? _nameController.text.trim() : 'Ventilation Fan 1';
-    final id = _idController.text.trim().isNotEmpty ? _idController.text.trim() : 'FAN001';
-    final type = _typeController.text.trim().isNotEmpty ? _typeController.text.trim() : 'Fan';
-    final description = _descriptionController.text.trim();
-
-    Navigator.of(context).pop(
-      _VentilationDevice(
-        name: name,
-        id: id,
-        type: type,
-        description: description,
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final bottomInset = MediaQuery.of(context).viewInsets.bottom;
-    final maxHeight = MediaQuery.of(context).size.height * 0.72;
-    return SafeArea(
-      top: false,
-      child: Padding(
-        padding: EdgeInsets.only(bottom: bottomInset),
-        child: Align(
-          alignment: Alignment.bottomCenter,
-          child: ConstrainedBox(
-            constraints: BoxConstraints(maxHeight: maxHeight),
-            child: Container(
-            padding: const EdgeInsets.fromLTRB(18, 14, 18, 16),
-            decoration: const BoxDecoration(
-              color: Color(0xFFF7FCF8),
-              borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-            ),
-            child: SingleChildScrollView(
-              keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                Row(
-                  children: [
-                    const Expanded(
-                      child: Text(
-                        'Add New Device',
-                        style: TextStyle(
-                          color: Color(0xFF1F2937),
-                          fontSize: 22,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                    ),
-                    InkWell(
-                      onTap: () => Navigator.of(context).pop(),
-                      borderRadius: BorderRadius.circular(999),
-                      child: Container(
-                        width: 34,
-                        height: 34,
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(999),
-                          border: Border.all(color: const Color(0xFFDCE5DD)),
-                        ),
-                        child: const Icon(Icons.close_rounded, size: 18, color: Color(0xFF64748B)),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 14),
-                const _SheetLabel('DEVICE NAME'),
-                const SizedBox(height: 6),
-                _SheetTextField(controller: _nameController, hintText: 'e.g. Ventilation Fan 2'),
-                const SizedBox(height: 10),
-                const _SheetLabel('DEVICE ID'),
-                const SizedBox(height: 6),
-                _SheetTextField(controller: _idController, hintText: 'e.g. FAN002'),
-                const SizedBox(height: 10),
-                const _SheetLabel('DEVICE TYPE'),
-                const SizedBox(height: 6),
-                _SheetTextField(controller: _typeController, hintText: 'Fan'),
-                const SizedBox(height: 10),
-                const _SheetLabel('DESCRIPTION (OPTIONAL)'),
-                const SizedBox(height: 6),
-                _SheetTextField(
-                  controller: _descriptionController,
-                  hintText: 'Enter device details...',
-                  maxLines: 3,
-                ),
-                const SizedBox(height: 12),
-                SizedBox(
-                  width: double.infinity,
-                  height: 52,
-                  child: FilledButton(
-                    onPressed: _save,
-                    style: FilledButton.styleFrom(
-                      backgroundColor: const Color(0xFF0BB13F),
-                      foregroundColor: Colors.white,
-                      elevation: 0,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                    ),
-                    child: const Text(
-                      'Save Device',
-                      style: TextStyle(fontWeight: FontWeight.w800),
-                    ),
-                  ),
-                ),
-                ],
-              ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 class _SheetLabel extends StatelessWidget {
   final String text;
 
@@ -2691,52 +3885,6 @@ class _SheetLabel extends StatelessWidget {
         fontSize: 11,
         fontWeight: FontWeight.w800,
         letterSpacing: 0.4,
-      ),
-    );
-  }
-}
-
-class _SheetTextField extends StatelessWidget {
-  final TextEditingController controller;
-  final String hintText;
-  final int maxLines;
-
-  const _SheetTextField({
-    required this.controller,
-    required this.hintText,
-    this.maxLines = 1,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return TextField(
-      controller: controller,
-      maxLines: maxLines,
-      style: const TextStyle(
-        color: Color(0xFF111827),
-        fontWeight: FontWeight.w700,
-      ),
-      decoration: InputDecoration(
-        hintText: hintText,
-        hintStyle: const TextStyle(
-          color: Color(0xFF9AA7BC),
-          fontWeight: FontWeight.w600,
-        ),
-        filled: true,
-        fillColor: Colors.white,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
-          borderSide: const BorderSide(color: Color(0xFFDCE4EE)),
-        ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
-          borderSide: const BorderSide(color: Color(0xFFDCE4EE)),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
-          borderSide: const BorderSide(color: Color(0xFF90D6A4)),
-        ),
       ),
     );
   }

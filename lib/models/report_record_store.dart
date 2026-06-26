@@ -1,5 +1,7 @@
 import 'auth_store.dart';
 import 'firebase_database_service.dart';
+import 'shared_workspace.dart';
+import 'shared_workspace_migration.dart';
 
 enum ReportRecordType { event, maintenance }
 
@@ -80,9 +82,19 @@ class ReportRecordStore {
       return const [];
     }
 
-    final response = await _database.get(
-      'user_data/${user.id}/report_records/$batchId/${_typeKey(type)}.json',
-    );
+    final recordPath = 'report_records/$batchId/${_typeKey(type)}.json';
+    var response = await _database.get(SharedWorkspace.path(recordPath));
+    if (response is! Map<String, dynamic> || response.isEmpty) {
+      final legacyResponse = await _loadLegacyRecords(user.id, recordPath);
+      if (legacyResponse is Map<String, dynamic> &&
+          legacyResponse.isNotEmpty) {
+        response = legacyResponse;
+        await _database.put(
+          SharedWorkspace.path(recordPath),
+          Map<String, dynamic>.from(legacyResponse),
+        );
+      }
+    }
     if (response is! Map<String, dynamic>) {
       return const [];
     }
@@ -97,6 +109,16 @@ class ReportRecordStore {
 
     entries.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
     return entries;
+  }
+
+  Future<Map<String, dynamic>?> _loadLegacyRecords(
+    String currentUserId,
+    String recordPath,
+  ) async {
+    return SharedWorkspaceMigration.instance.loadLegacyMap(
+      recordPath,
+      fallbackUserId: currentUserId,
+    );
   }
 
   Future<ReportRecord> saveEntry({
@@ -118,7 +140,9 @@ class ReportRecordStore {
     );
 
     await _database.put(
-      'user_data/${user.id}/report_records/$batchId/${_typeKey(type)}/$entryId.json',
+      SharedWorkspace.path(
+        'report_records/$batchId/${_typeKey(type)}/$entryId.json',
+      ),
       savedEntry.toJson(),
     );
 
@@ -136,7 +160,9 @@ class ReportRecordStore {
     }
 
     await _database.delete(
-      'user_data/${user.id}/report_records/$batchId/${_typeKey(type)}/$entryId.json',
+      SharedWorkspace.path(
+        'report_records/$batchId/${_typeKey(type)}/$entryId.json',
+      ),
     );
   }
 
@@ -149,7 +175,7 @@ class ReportRecordStore {
     }
 
     await _database.delete(
-      'user_data/${user.id}/report_records/$batchId.json',
+      SharedWorkspace.path('report_records/$batchId.json'),
     );
   }
 

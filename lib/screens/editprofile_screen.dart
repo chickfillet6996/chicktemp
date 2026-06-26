@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../models/auth_store.dart';
+import '../widgets/chicktemp_loading.dart';
 import '../widgets/settings_back_card.dart';
 import '../widgets/settings_overlay_sheet.dart';
 import '../widgets/user_avatar_content.dart';
@@ -243,13 +244,8 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                       ),
                     ),
                     icon: _isSaving
-                        ? const SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Colors.white,
-                            ),
+                        ? const ChickTempLoading.compact(
+                            size: 20,
                           )
                         : const Icon(Icons.save_outlined, size: 16),
                     label: Text(

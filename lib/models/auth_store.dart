@@ -171,7 +171,7 @@ class AuthStore {
       'phone_number': '',
       'role': 'manager',
       'profile_photo_base64': '',
-      'starts_with_empty_controls': true,
+      'starts_with_empty_controls': false,
     };
 
     await _database.put('users/$userId.json', userJson);

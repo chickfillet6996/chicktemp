@@ -4,6 +4,7 @@ import '../models/account_session_reset.dart';
 import '../models/auth_store.dart';
 import '../models/batch_store.dart';
 import '../widgets/auth_animated_logo_header.dart';
+import '../widgets/chicktemp_loading.dart';
 import 'dashboards_screen.dart';
 import 'forgot_password_screen.dart';
 import 'signup_screen.dart';
@@ -509,14 +510,8 @@ class _LoginScreenState extends State<LoginScreen>
                                           ),
                                         ),
                                         child: _isLoading
-                                            ? const SizedBox(
-                                                width: 18,
-                                                height: 18,
-                                                child:
-                                                    CircularProgressIndicator(
-                                                      strokeWidth: 2,
-                                                      color: Colors.white,
-                                                    ),
+                                            ? const ChickTempLoading.compact(
+                                                size: 22,
                                               )
                                             : const Row(
                                                 mainAxisAlignment:

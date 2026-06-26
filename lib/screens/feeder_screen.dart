@@ -4,6 +4,7 @@ import 'analytics_screen.dart';
 import '../models/auth_store.dart';
 import '../models/device_config_store.dart';
 import '../models/monitoring_store.dart';
+import '../widgets/chicktemp_loading.dart';
 import '../widgets/user_avatar_content.dart';
 import 'reports_screen.dart';
 import 'profile_screen.dart';
@@ -51,25 +52,6 @@ class _FeederScreenState extends State<FeederScreen> {
   void _toggleExpanded() {
     setState(() {
       _expanded = !_expanded;
-    });
-    _persistConfig();
-  }
-
-  Future<void> _openAddDeviceSheet() async {
-    final result = await showModalBottomSheet<_FeederDevice>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (_) => const _AddFeederDeviceSheet(),
-    );
-
-    if (!mounted || result == null) {
-      return;
-    }
-
-    setState(() {
-      _devices.insert(0, result);
-      _expanded = true;
     });
     _persistConfig();
   }
@@ -178,9 +160,8 @@ class _FeederScreenState extends State<FeederScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final subtitle = _hasDevices
-        ? '${_devices.length} Device${_devices.length == 1 ? '' : 's'} Connected'
-        : 'No Devices';
+    final telemetry = MonitoringStore.instance.snapshotFor(widget.batchName);
+    final subtitle = telemetry.isFeederLevelLive ? 'Online' : 'Offline';
     final headerTint = _hasDevices
         ? const Color(0xFFFCEFD9)
         : const Color(0xFFF8E7D0);
@@ -354,9 +335,9 @@ class _FeederScreenState extends State<FeederScreen> {
                       ? const Padding(
                           padding: EdgeInsets.only(top: 12),
                           child: Center(
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Color(0xFF0BB13F),
+                            child: ChickTempLoading(
+                              text: 'Loading feeder controls...',
+                              size: 48,
                             ),
                           ),
                         )
@@ -501,31 +482,6 @@ class _FeederScreenState extends State<FeederScreen> {
               ),
             );
           })
-        else ...[
-          const SizedBox(height: 12),
-          const _EmptyFeederPlaceholder(),
-        ],
-        const SizedBox(height: 12),
-        SizedBox(
-          width: double.infinity,
-          height: 48,
-          child: OutlinedButton.icon(
-            onPressed: _openAddDeviceSheet,
-            style: OutlinedButton.styleFrom(
-              foregroundColor: const Color(0xFF8B5A1A),
-              side: const BorderSide(color: Color(0xFFF0E0C7)),
-              backgroundColor: const Color(0xFFFFF6EA),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16),
-              ),
-            ),
-            icon: const Icon(Icons.add, size: 18),
-            label: const Text(
-              'Add Auto Feeder Lines Device',
-              style: TextStyle(fontWeight: FontWeight.w700),
-            ),
-          ),
-        ),
       ],
     );
   }
@@ -538,79 +494,69 @@ class _FeederLevelCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final hasReading =
-        telemetry.isFeederLevelLive || telemetry.feederDistanceCm > 0;
+    final hasReading = telemetry.isFeederLevelLive;
     final level = hasReading ? telemetry.feederLevelPercent : 0.0;
-    final status = telemetry.isFeederLevelLive
-        ? 'LIVE'
-        : hasReading
-        ? 'OFFLINE'
-        : 'NO DATA';
-    final statusColor = telemetry.isFeederLevelLive
-        ? const Color(0xFF2E7D32)
-        : const Color(0xFF64748B);
+    final levelColor = level <= 20
+        ? const Color(0xFFE5484D)
+        : level <= 45
+            ? const Color(0xFFF59E0B)
+            : const Color(0xFFF57C00);
 
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(18),
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: const Color(0xFFFFF8EE),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: const Color(0xFFF0DFC4)),
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: const Color(0xFFE3E9E4)),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            width: 48,
-            height: 48,
-            decoration: BoxDecoration(
-              color: const Color(0xFFFCE9CB),
-              borderRadius: BorderRadius.circular(15),
-            ),
-            child: const Icon(
-              Icons.restaurant_outlined,
-              color: Color(0xFFB45309),
-            ),
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'Feeder Level',
+          Row(
+            children: [
+              const Icon(Icons.sensors, color: Color(0xFFF57C00), size: 20),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Text(
+                  'HC-SR04 FEEDER LEVEL',
                   style: TextStyle(
-                    color: Color(0xFF5D4930),
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const SizedBox(height: 3),
-                Text(
-                  hasReading ? '${level.toStringAsFixed(0)}%' : '--',
-                  style: const TextStyle(
-                    color: Color(0xFF172033),
-                    fontSize: 26,
+                    color: Color(0xFF233047),
+                    fontSize: 12,
                     fontWeight: FontWeight.w800,
+                    letterSpacing: 0.3,
                   ),
                 ),
-              ],
+              ),
+              Text(
+                hasReading ? '${level.toStringAsFixed(0)}%' : 'NO READING',
+                style: TextStyle(
+                  color: hasReading ? levelColor : const Color(0xFF93A0B6),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(999),
+            child: LinearProgressIndicator(
+              value: level / 100,
+              minHeight: 12,
+              backgroundColor: const Color(0xFFE8EFF2),
+              valueColor: AlwaysStoppedAnimation<Color>(levelColor),
             ),
           ),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-            decoration: BoxDecoration(
-              color: statusColor.withOpacity(0.1),
-              borderRadius: BorderRadius.circular(999),
-            ),
-            child: Text(
-              status,
-              style: TextStyle(
-                color: statusColor,
-                fontSize: 10,
-                fontWeight: FontWeight.w800,
-                letterSpacing: 0.4,
-              ),
+          const SizedBox(height: 8),
+          Text(
+            hasReading
+                ? '${telemetry.feederDistanceCm.toStringAsFixed(1)} cm between sensor and feed surface'
+                : 'Waiting for the ultrasonic sensor',
+            style: const TextStyle(
+              color: Color(0xFF93A0B6),
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
             ),
           ),
         ],
@@ -742,7 +688,7 @@ class _FeederControlCard extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Text(
-                  'Main Feeder Control',
+                  'Servo Motor Relay',
                   style: TextStyle(
                     color: Color(0xFF233047),
                     fontSize: 15,
@@ -751,7 +697,7 @@ class _FeederControlCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 6),
                 const Text(
-                  'Master trigger inactive -\nIndividual controls still active',
+                  'Controls relay K4 / IN4.\nServo uses the separate power line.',
                   style: TextStyle(
                     color: Color(0xFF93A0B6),
                     fontSize: 10,
@@ -1062,189 +1008,6 @@ class _FeederDevice {
   }
 }
 
-class _EmptyFeederPlaceholder extends StatelessWidget {
-  const _EmptyFeederPlaceholder();
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      height: 44,
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        color: const Color(0xFFF8FAFD),
-        borderRadius: BorderRadius.circular(14),
-      ),
-      child: const Text(
-        'No devices added yet',
-        style: TextStyle(
-          color: Color(0xFF9AA8BD),
-          fontSize: 12,
-          fontWeight: FontWeight.w700,
-        ),
-      ),
-    );
-  }
-}
-
-class _AddFeederDeviceSheet extends StatefulWidget {
-  const _AddFeederDeviceSheet();
-
-  @override
-  State<_AddFeederDeviceSheet> createState() => _AddFeederDeviceSheetState();
-}
-
-class _AddFeederDeviceSheetState extends State<_AddFeederDeviceSheet> {
-  final TextEditingController _nameController = TextEditingController();
-  final TextEditingController _idController = TextEditingController();
-  final TextEditingController _typeController = TextEditingController(
-    text: 'Feeder',
-  );
-  final TextEditingController _descriptionController = TextEditingController();
-
-  @override
-  void dispose() {
-    _nameController.dispose();
-    _idController.dispose();
-    _typeController.dispose();
-    _descriptionController.dispose();
-    super.dispose();
-  }
-
-  void _save() {
-    Navigator.of(context).pop(
-      _FeederDevice(
-        name: _nameController.text.trim().isNotEmpty
-            ? _nameController.text.trim()
-            : 'Auto Feeder 1',
-        id: _idController.text.trim().isNotEmpty
-            ? _idController.text.trim()
-            : 'FED001',
-        type: _typeController.text.trim().isNotEmpty
-            ? _typeController.text.trim()
-            : 'Feeder',
-        description: _descriptionController.text.trim(),
-        enabled: true,
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final bottomInset = MediaQuery.of(context).viewInsets.bottom;
-    final maxHeight = MediaQuery.of(context).size.height * 0.72;
-    return SafeArea(
-      top: false,
-      child: Padding(
-        padding: EdgeInsets.only(bottom: bottomInset),
-        child: Align(
-          alignment: Alignment.bottomCenter,
-          child: ConstrainedBox(
-            constraints: BoxConstraints(maxHeight: maxHeight),
-            child: Container(
-            padding: const EdgeInsets.fromLTRB(18, 14, 18, 16),
-            decoration: const BoxDecoration(
-              color: Color(0xFFF7FCF8),
-              borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-            ),
-            child: SingleChildScrollView(
-              keyboardDismissBehavior:
-                  ScrollViewKeyboardDismissBehavior.onDrag,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                Row(
-                  children: [
-                    const Expanded(
-                      child: Text(
-                        'Add New Device',
-                        style: TextStyle(
-                          color: Color(0xFF1F2937),
-                          fontSize: 22,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                    ),
-                    InkWell(
-                      onTap: () => Navigator.of(context).pop(),
-                      borderRadius: BorderRadius.circular(999),
-                      child: Container(
-                        width: 34,
-                        height: 34,
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(999),
-                          border: Border.all(color: const Color(0xFFDCE5DD)),
-                        ),
-                        child: const Icon(
-                          Icons.close_rounded,
-                          size: 18,
-                          color: Color(0xFF64748B),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 14),
-                const _SheetLabel('DEVICE NAME'),
-                const SizedBox(height: 6),
-                _SheetTextField(
-                  controller: _nameController,
-                  hintText: 'e.g. Ventilation Fan 2',
-                ),
-                const SizedBox(height: 10),
-                const _SheetLabel('DEVICE ID'),
-                const SizedBox(height: 6),
-                _SheetTextField(
-                  controller: _idController,
-                  hintText: 'e.g. FAN002',
-                ),
-                const SizedBox(height: 10),
-                const _SheetLabel('DEVICE TYPE'),
-                const SizedBox(height: 6),
-                _SheetTextField(
-                  controller: _typeController,
-                  hintText: 'Feeder',
-                ),
-                const SizedBox(height: 10),
-                const _SheetLabel('DESCRIPTION (OPTIONAL)'),
-                const SizedBox(height: 6),
-                _SheetTextField(
-                  controller: _descriptionController,
-                  hintText: 'Enter device details...',
-                  maxLines: 3,
-                ),
-                const SizedBox(height: 12),
-                SizedBox(
-                  width: double.infinity,
-                  height: 52,
-                  child: FilledButton(
-                    onPressed: _save,
-                    style: FilledButton.styleFrom(
-                      backgroundColor: const Color(0xFF0BB13F),
-                      foregroundColor: Colors.white,
-                      elevation: 0,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                    ),
-                    child: const Text(
-                      'Save Device',
-                      style: TextStyle(fontWeight: FontWeight.w800),
-                    ),
-                  ),
-                ),
-                ],
-              ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 class _FeederScheduleDraft {
   final String time;
   final bool active;
@@ -1487,55 +1250,6 @@ class _SheetLabel extends StatelessWidget {
         fontSize: 11,
         fontWeight: FontWeight.w800,
         letterSpacing: 0.4,
-      ),
-    );
-  }
-}
-
-class _SheetTextField extends StatelessWidget {
-  final TextEditingController controller;
-  final String hintText;
-  final int maxLines;
-
-  const _SheetTextField({
-    required this.controller,
-    required this.hintText,
-    this.maxLines = 1,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return TextField(
-      controller: controller,
-      maxLines: maxLines,
-      style: const TextStyle(
-        color: Color(0xFF111827),
-        fontWeight: FontWeight.w700,
-      ),
-      decoration: InputDecoration(
-        hintText: hintText,
-        hintStyle: const TextStyle(
-          color: Color(0xFF9AA7BC),
-          fontWeight: FontWeight.w600,
-        ),
-        filled: true,
-        fillColor: Colors.white,
-        contentPadding: const EdgeInsets.symmetric(
-          horizontal: 14,
-          vertical: 14,
-        ),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
-          borderSide: const BorderSide(color: Color(0xFFDCE4EE)),
-        ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
-          borderSide: const BorderSide(color: Color(0xFFDCE4EE)),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
-          borderSide: const BorderSide(color: Color(0xFF90D6A4)),
-        ),
       ),
     );
   }

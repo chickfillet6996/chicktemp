@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'auth_store.dart';
 import 'batch_store.dart';
 import 'firebase_database_service.dart';
+import 'shared_workspace.dart';
 
 class EnvironmentalLog {
   final String id;
@@ -120,12 +121,12 @@ class EnvironmentalLogStore extends ChangeNotifier {
     required double feederLevelPercent,
     required double feederDistanceCm,
   }) async {
-    final user = AuthStore.instance.currentUser;
-    if (user == null || temperature <= 0 || humidity <= 0) {
+    if (temperature <= 0 || humidity <= 0) {
       return;
     }
 
-    final recordKey = '${user.id}_${batch.stableId}';
+    final user = AuthStore.instance.currentUser;
+    final recordKey = '${SharedWorkspace.id}_${batch.stableId}';
     if (!_recordingBatchKeys.add(recordKey)) {
       return;
     }
@@ -160,7 +161,7 @@ class EnvironmentalLogStore extends ChangeNotifier {
         feederDistanceCm: double.parse(feederDistanceCm.toStringAsFixed(1)),
         recordedAt: now,
       );
-      await _appendLocalLog(user.id, log);
+      await _appendLocalLog(log);
       final prefs = await SharedPreferences.getInstance();
       final timestampKey = _lastRecordedTimestampKey(recordKey);
       await prefs.setString(timestampKey, now.toIso8601String());
@@ -170,9 +171,9 @@ class EnvironmentalLogStore extends ChangeNotifier {
       try {
         await _database.put(
           'environmental_logs/${log.id}.json',
-          log.toJson(userId: user.id),
+          log.toJson(userId: user?.id),
         );
-        await _markLogSynced(user.id, log.id);
+        await _markLogSynced(SharedWorkspace.id, log.id);
       } on Object {
         // Cached records are retried when Analytics loads again.
       }
@@ -184,12 +185,9 @@ class EnvironmentalLogStore extends ChangeNotifier {
   }
 
   Future<List<EnvironmentalLog>> fetchRecentLogs({int limit = 48}) async {
-    final userId = AuthStore.instance.currentUser?.id;
-    final localLogs = userId == null
-        ? <EnvironmentalLog>[]
-        : await _loadLocalLogs(userId);
-    if (userId != null && localLogs.isNotEmpty) {
-      unawaited(_syncLocalLogs(userId, localLogs));
+    final localLogs = await _loadLocalLogs();
+    if (localLogs.isNotEmpty) {
+      unawaited(_syncLocalLogs(localLogs));
     }
 
     final logsById = <String, EnvironmentalLog>{
@@ -201,9 +199,6 @@ class EnvironmentalLogStore extends ChangeNotifier {
         for (final entry in response.entries) {
           final value = entry.value;
           if (value is Map<String, dynamic>) {
-            if (!_belongsToCurrentUser(value, userId)) {
-              continue;
-            }
             logsById[entry.key] = EnvironmentalLog.fromJson(entry.key, value);
           }
         }
@@ -211,18 +206,42 @@ class EnvironmentalLogStore extends ChangeNotifier {
     } on Object {
       // Local history remains available while Firebase is unreachable.
     }
-
     final logs = logsById.values.toList();
     logs.sort((a, b) => b.recordedAt.compareTo(a.recordedAt));
-    if (userId != null) {
-      final cachedLogs = logs.take(240).toList().reversed.toList();
-      try {
-        await _saveLocalLogs(userId, cachedLogs);
-      } on Object {
-        // Fresh Firebase history remains usable if local caching fails.
-      }
+    final cachedLogs = logs.take(240).toList().reversed.toList();
+    try {
+      await _saveLocalLogs(cachedLogs);
+    } on Object {
+      // Fresh Firebase history remains usable if local caching fails.
     }
     return logs.take(limit).toList().reversed.toList();
+  }
+
+  Future<List<EnvironmentalLog>> fetchLogsForBatch({
+    required BatchItem batch,
+    int limit = 500,
+  }) async {
+    final logs = await fetchRecentLogs(limit: 10000);
+    final batchKeys = <String>{
+      batch.stableId,
+      batch.name,
+      _safeKey(batch.name),
+      if (BatchStore.instance.batches.length == 1) 'default_batch',
+    };
+
+    final filteredLogs = logs.where((log) {
+      return batchKeys.contains(log.batchId) ||
+          batchKeys.contains(_safeKey(log.batchId));
+    }).toList();
+
+    final batchLogs = filteredLogs.isEmpty &&
+            BatchStore.instance.batches.length == 1
+        ? logs
+        : filteredLogs;
+    if (batchLogs.length <= limit) {
+      return batchLogs;
+    }
+    return batchLogs.sublist(batchLogs.length - limit);
   }
 
   Future<EnvironmentalLog?> fetchLatestLogForBatch({
@@ -252,18 +271,15 @@ class EnvironmentalLogStore extends ChangeNotifier {
   Future<void> deleteLogsForBatch({
     required BatchItem batch,
   }) async {
-    final userId = AuthStore.instance.currentUser?.id;
-    if (userId != null) {
-      final localLogs = await _loadLocalLogs(userId);
-      final retainedLogs = localLogs
-          .where(
-            (log) =>
-                log.batchId != batch.stableId &&
-                _safeKey(log.batchId) != _safeKey(batch.name),
-          )
-          .toList();
-      await _saveLocalLogs(userId, retainedLogs);
-    }
+    final localLogs = await _loadLocalLogs();
+    final retainedLogs = localLogs
+        .where(
+          (log) =>
+              log.batchId != batch.stableId &&
+              _safeKey(log.batchId) != _safeKey(batch.name),
+        )
+        .toList();
+    await _saveLocalLogs(retainedLogs);
 
     final response = await _database.get('environmental_logs.json');
     if (response is! Map<String, dynamic>) {
@@ -280,10 +296,6 @@ class EnvironmentalLogStore extends ChangeNotifier {
       if (value is! Map<String, dynamic>) {
         continue;
       }
-      if (!_belongsToCurrentUser(value, userId)) {
-        continue;
-      }
-
       final log = EnvironmentalLog.fromJson(entry.key, value);
       if (!validBatchIds.contains(log.batchId)) {
         continue;
@@ -303,31 +315,34 @@ class EnvironmentalLogStore extends ChangeNotifier {
     return key.isEmpty ? 'default_batch' : key;
   }
 
-  bool _belongsToCurrentUser(Map<String, dynamic> json, String? userId) {
-    if (userId == null || userId.isEmpty) {
-      return false;
-    }
-    return json['user_id']?.toString() == userId;
-  }
-
   String _lastRecordedTimestampKey(String recordKey) {
     final safeKey = _safeKey(recordKey);
-    return 'last_environmental_log_$safeKey';
+    return SharedWorkspace.localKey('last_environmental_log_$safeKey');
   }
 
-  Future<void> _appendLocalLog(String userId, EnvironmentalLog log) async {
-    final logs = await _loadLocalLogs(userId);
+  Future<void> _appendLocalLog(EnvironmentalLog log) async {
+    final logs = await _loadLocalLogs();
     logs.add(log);
     logs.sort((a, b) => a.recordedAt.compareTo(b.recordedAt));
     final retainedLogs = logs.length <= 240
         ? logs
         : logs.sublist(logs.length - 240);
-    await _saveLocalLogs(userId, retainedLogs);
+    await _saveLocalLogs(retainedLogs);
   }
 
-  Future<List<EnvironmentalLog>> _loadLocalLogs(String userId) async {
+  Future<List<EnvironmentalLog>> _loadLocalLogs() async {
     final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(_localLogsKey(userId));
+    var raw = prefs.getString(_localLogsKey);
+    if (raw == null || raw.isEmpty) {
+      final userId = AuthStore.instance.currentUser?.id;
+      if (userId != null && userId.isNotEmpty) {
+        final legacyKey = 'cached_environmental_logs_${_safeKey(userId)}';
+        raw = prefs.getString(legacyKey);
+        if (raw != null && raw.isNotEmpty) {
+          await prefs.setString(_localLogsKey, raw);
+        }
+      }
+    }
     if (raw == null || raw.isEmpty) {
       return <EnvironmentalLog>[];
     }
@@ -352,27 +367,22 @@ class EnvironmentalLogStore extends ChangeNotifier {
     }
   }
 
-  Future<void> _saveLocalLogs(
-    String userId,
-    List<EnvironmentalLog> logs,
-  ) async {
+  Future<void> _saveLocalLogs(List<EnvironmentalLog> logs) async {
     final prefs = await SharedPreferences.getInstance();
     final encodedLogs = logs
-        .map((log) => {'id': log.id, ...log.toJson(userId: userId)})
+        .map((log) => {'id': log.id, ...log.toJson()})
         .toList();
-    await prefs.setString(_localLogsKey(userId), jsonEncode(encodedLogs));
+    await prefs.setString(_localLogsKey, jsonEncode(encodedLogs));
   }
 
-  Future<void> _syncLocalLogs(
-    String userId,
-    List<EnvironmentalLog> logs,
-  ) async {
-    if (!_syncingUsers.add(userId)) {
+  Future<void> _syncLocalLogs(List<EnvironmentalLog> logs) async {
+    const scopeKey = SharedWorkspace.id;
+    if (!_syncingUsers.add(scopeKey)) {
       return;
     }
 
     try {
-      final syncedIds = await _syncedLogIds(userId);
+      final syncedIds = await _syncedLogIds(scopeKey);
       var changed = false;
       for (final log in logs.where(
         (item) => item.id.startsWith('app_') && !syncedIds.contains(item.id),
@@ -380,7 +390,7 @@ class EnvironmentalLogStore extends ChangeNotifier {
         try {
           await _database.put(
             'environmental_logs/${log.id}.json',
-            log.toJson(userId: userId),
+            log.toJson(userId: AuthStore.instance.currentUser?.id),
           );
           syncedIds.add(log.id);
           changed = true;
@@ -389,16 +399,14 @@ class EnvironmentalLogStore extends ChangeNotifier {
         }
       }
       if (changed) {
-        await _saveSyncedLogIds(userId, syncedIds);
+        await _saveSyncedLogIds(scopeKey, syncedIds);
       }
     } finally {
-      _syncingUsers.remove(userId);
+      _syncingUsers.remove(scopeKey);
     }
   }
 
-  String _localLogsKey(String userId) {
-    return 'cached_environmental_logs_${_safeKey(userId)}';
-  }
+  String get _localLogsKey => SharedWorkspace.localKey('environmental_logs');
 
   Future<DateTime?> _lastRecordedAt(String recordKey) async {
     if (_lastRecordedAtByKey.containsKey(recordKey)) {
@@ -443,7 +451,6 @@ class EnvironmentalLogStore extends ChangeNotifier {
     await prefs.setStringList(_syncedLogsKey(userId), retainedIds);
   }
 
-  String _syncedLogsKey(String userId) {
-    return 'synced_environmental_logs_${_safeKey(userId)}';
-  }
+  String _syncedLogsKey(String scopeKey) =>
+      SharedWorkspace.localKey('synced_environmental_logs_$scopeKey');
 }

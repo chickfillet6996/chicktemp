@@ -38,6 +38,7 @@ class BatchesDashboardScreen extends StatefulWidget {
 class _BatchesDashboardScreenState extends State<BatchesDashboardScreen>
     with SingleTickerProviderStateMixin {
   late final Listenable _dashboardListenable = Listenable.merge([
+    EnvironmentalLogStore.instance,
     MonitoringStore.instance,
     TemperatureSettingsStore.instance,
   ]);
@@ -57,6 +58,11 @@ class _BatchesDashboardScreenState extends State<BatchesDashboardScreen>
       vsync: this,
       duration: const Duration(milliseconds: 850),
     )..forward();
+    EnvironmentalLogStore.instance.addListener(_handleEnvironmentalLogChanged);
+    _loadLatestEnvironmentalLog();
+  }
+
+  void _handleEnvironmentalLogChanged() {
     _loadLatestEnvironmentalLog();
   }
 
@@ -150,6 +156,9 @@ class _BatchesDashboardScreenState extends State<BatchesDashboardScreen>
 
   @override
   void dispose() {
+    EnvironmentalLogStore.instance.removeListener(
+      _handleEnvironmentalLogChanged,
+    );
     _entranceController.dispose();
     _currentDayController.dispose();
     _totalDaysController.dispose();
@@ -215,6 +224,94 @@ class _BatchesDashboardScreenState extends State<BatchesDashboardScreen>
       }
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Could not save day update: $error')),
+      );
+    }
+  }
+
+  Future<void> _finishBatch(BatchItem batch) async {
+    final shouldFinish = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Finish Batch?'),
+          content: Text(
+            '${batch.name} will become historical/read-only. You can still view its saved analytics and reports.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('Finish'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (shouldFinish != true || !mounted) {
+      return;
+    }
+
+    try {
+      await BatchStore.instance.finishBatch(batchId: batch.stableId);
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _isEditingDay = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('${batch.name} moved to Batch History.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } on Object catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not finish batch: $error'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
+
+  Future<void> _refreshBatchDashboard() async {
+    try {
+      await BatchStore.instance.loadForCurrentUser();
+      final batch = _currentBatch;
+      await Future.wait([
+        TemperatureSettingsStore.instance.loadFor(
+          batch.name,
+          forceRefresh: true,
+        ),
+        EnvironmentalLogStore.instance.fetchLatestLogForBatch(batch: batch).then(
+          (log) {
+            if (mounted) {
+              setState(() => _latestEnvironmentalLog = log);
+            }
+          },
+        ),
+      ]);
+      MonitoringStore.instance.start();
+      if (mounted) {
+        setState(() {});
+      }
+    } on Object catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not refresh batch dashboard: $error'),
+          behavior: SnackBarBehavior.floating,
+        ),
       );
     }
   }
@@ -320,10 +417,14 @@ class _BatchesDashboardScreenState extends State<BatchesDashboardScreen>
               final totalBirds = BatchStore.instance.totalBirdsFor(currentBatch.name);
               final deaths = BatchStore.instance.mortalityCountFor(currentBatch.name);
               final batchStatusColors = _batchStatusColors(currentBatch.status);
+              final isActiveBatch = currentBatch.status.toUpperCase() == 'ACTIVE';
 
-                  return ListView(
-                    padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
-                    children: [
+                  return RefreshIndicator(
+                    onRefresh: _refreshBatchDashboard,
+                    child: ListView(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
+                      children: [
                     _DashboardReveal(
                       controller: _entranceController,
                       start: 0.00,
@@ -425,18 +526,26 @@ class _BatchesDashboardScreenState extends State<BatchesDashboardScreen>
                           onTap: () => Navigator.of(context).pop(),
                         ),
                         const Spacer(),
-                        _PillButton(
-                          icon: Icons.chevron_right_rounded,
-                          label: 'Controls',
-                          filled: true,
-                          onTap: () {
-                            Navigator.of(context).push(
-                              MaterialPageRoute(
-                                builder: (_) => ControlsScreen(batchName: currentBatch.name),
-                              ),
-                            );
-                          },
-                        ),
+                        if (isActiveBatch) ...[
+                          _PillButton(
+                            icon: Icons.flag_circle_outlined,
+                            label: 'Finish',
+                            onTap: () => _finishBatch(currentBatch),
+                          ),
+                          const SizedBox(width: 8),
+                          _PillButton(
+                            icon: Icons.chevron_right_rounded,
+                            label: 'Controls',
+                            filled: true,
+                            onTap: () {
+                              Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (_) => ControlsScreen(batchName: currentBatch.name),
+                                ),
+                              );
+                            },
+                          ),
+                        ],
                       ],
                     ),
                     const SizedBox(height: 12),
@@ -545,22 +654,23 @@ class _BatchesDashboardScreenState extends State<BatchesDashboardScreen>
                                 ),
                               ),
                               const SizedBox(width: 10),
-                              IconButton(
-                                onPressed: () => _startEditingDay(currentBatch),
-                                tooltip: 'Edit day',
-                                style: IconButton.styleFrom(
-                                  backgroundColor: const Color(0xFFF5F8FB),
-                                  side: const BorderSide(color: Color(0xFFDCE5EE)),
+                              if (isActiveBatch)
+                                IconButton(
+                                  onPressed: () => _startEditingDay(currentBatch),
+                                  tooltip: 'Edit day',
+                                  style: IconButton.styleFrom(
+                                    backgroundColor: const Color(0xFFF5F8FB),
+                                    side: const BorderSide(color: Color(0xFFDCE5EE)),
+                                  ),
+                                  icon: const Icon(
+                                    Icons.edit_outlined,
+                                    color: Color(0xFF5F7DA8),
+                                    size: 20,
+                                  ),
                                 ),
-                                icon: const Icon(
-                                  Icons.edit_outlined,
-                                  color: Color(0xFF5F7DA8),
-                                  size: 20,
-                                ),
-                              ),
                             ],
                           ),
-                          if (_isEditingDay) ...[
+                          if (isActiveBatch && _isEditingDay) ...[
                             const SizedBox(height: 14),
                             Row(
                               children: [
@@ -817,27 +927,30 @@ class _BatchesDashboardScreenState extends State<BatchesDashboardScreen>
                               ),
                             ],
                           ),
-                          const SizedBox(height: 14),
-                          _ActionButton(
-                            icon: Icons.groups_outlined,
-                            label: 'Manage Batch & Mortality',
-                            onTap: () {
-                              Navigator.of(context).push(
-                                MaterialPageRoute(
-                                  builder: (_) => MortalityScreen(
-                                    batchName: currentBatch.name,
-                                    dayLabel: currentBatch.dayLabel,
+                          if (isActiveBatch) ...[
+                            const SizedBox(height: 14),
+                            _ActionButton(
+                              icon: Icons.groups_outlined,
+                              label: 'Manage Batch & Mortality',
+                              onTap: () {
+                                Navigator.of(context).push(
+                                  MaterialPageRoute(
+                                    builder: (_) => MortalityScreen(
+                                      batchName: currentBatch.name,
+                                      dayLabel: currentBatch.dayLabel,
+                                    ),
                                   ),
-                                ),
-                              );
-                            },
-                          ),
+                                );
+                              },
+                            ),
+                          ],
                         ],
                         ),
                       ),
                     ),
-                      const SizedBox(height: 120),
-                    ],
+                        const SizedBox(height: 120),
+                      ],
+                    ),
                   );
                 },
               ),

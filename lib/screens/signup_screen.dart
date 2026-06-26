@@ -4,6 +4,7 @@ import '../models/account_session_reset.dart';
 import '../models/auth_store.dart';
 import '../models/batch_store.dart';
 import '../widgets/auth_animated_logo_header.dart';
+import '../widgets/chicktemp_loading.dart';
 import 'dashboards_screen.dart';
 
 const Color _authFieldColor = Color(0xFF757575);
@@ -95,14 +96,14 @@ class _SignUpScreenState extends State<SignUpScreen>
       }
 
       resetAccountScopedStores();
-      await BatchStore.instance.saveAllForCurrentUser();
+      await BatchStore.instance.loadForCurrentUser();
       if (!mounted) {
         return;
       }
 
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(
-          builder: (_) => const DashboardScreen(promptCreateBatch: true),
+          builder: (_) => const DashboardScreen(promptCreateBatch: false),
         ),
       );
     } on Object catch (error) {
@@ -484,14 +485,8 @@ class _SignUpScreenState extends State<SignUpScreen>
                                           ),
                                         ),
                                         child: _isLoading
-                                            ? const SizedBox(
-                                                width: 18,
-                                                height: 18,
-                                                child:
-                                                    CircularProgressIndicator(
-                                                      strokeWidth: 2,
-                                                      color: Colors.white,
-                                                    ),
+                                            ? const ChickTempLoading.compact(
+                                                size: 22,
                                               )
                                             : const Row(
                                                 mainAxisAlignment:

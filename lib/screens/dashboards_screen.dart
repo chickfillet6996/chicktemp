@@ -12,6 +12,7 @@ import '../models/environmental_log_store.dart';
 import '../models/firebase_database_service.dart';
 import '../models/monitoring_store.dart';
 import '../models/report_record_store.dart';
+import '../models/shared_workspace.dart';
 import '../models/temperature_settings_store.dart';
 import '../widgets/splash_background.dart';
 import '../widgets/user_avatar_content.dart';
@@ -61,6 +62,19 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<void> _openCreateBatch({required bool showAsPopup}) async {
+    final activeBatch = BatchStore.instance.activeBatch;
+    if (activeBatch != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Finish ${activeBatch.name} before creating a new batch.',
+          ),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
     final routeBuilder = MaterialPageRoute<BatchItem>(
       builder: (_) => const CreateBatchScreen(),
     );
@@ -83,7 +97,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
 
     if (saved != null) {
-      BatchStore.instance.add(saved);
+      try {
+        BatchStore.instance.add(saved);
+      } on StateError catch (error) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(error.message),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      }
 
       showDialog<void>(
         context: context,
@@ -101,6 +125,98 @@ class _DashboardScreenState extends State<DashboardScreen> {
         },
       );
     }
+  }
+
+  Future<void> _finishBatch(BatchItem batch) async {
+    final shouldFinish = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return Dialog(
+          backgroundColor: Colors.transparent,
+          insetPadding: const EdgeInsets.symmetric(horizontal: 24),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(28),
+            child: SplashBackground(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(24, 24, 24, 18),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Finish Batch?',
+                      style: TextStyle(
+                        color: Color(0xFF1F2D21),
+                        fontSize: 22,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    Text(
+                      '${batch.name} will move to Batch History. You can still open reports and records, but it will no longer be the active batch.',
+                      style: const TextStyle(
+                        color: Color(0xFF2F3D31),
+                        fontSize: 13,
+                        fontWeight: FontWeight.w500,
+                        height: 1.35,
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        TextButton(
+                          onPressed: () => Navigator.of(context).pop(false),
+                          child: const Text('Cancel'),
+                        ),
+                        const SizedBox(width: 12),
+                        FilledButton(
+                          onPressed: () => Navigator.of(context).pop(true),
+                          style: FilledButton.styleFrom(
+                            backgroundColor: const Color(0xFF17863A),
+                            foregroundColor: Colors.white,
+                          ),
+                          child: const Text('Finish'),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+
+    if (shouldFinish != true || !mounted) {
+      return;
+    }
+
+    try {
+      await BatchStore.instance.finishBatch(batchId: batch.stableId);
+    } on Object catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not finish ${batch.name}: $error'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('${batch.name} moved to Batch History.'),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
   }
 
   Future<void> _deleteBatch(BatchItem batch) async {
@@ -214,7 +330,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
 
     await FirebaseDatabaseService.instance.delete(
-      'user_data/${user.id}/mortality_records/$batchId.json',
+      SharedWorkspace.path('mortality_records/$batchId.json'),
     );
   }
 
@@ -239,6 +355,44 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
+  Future<void> _openBatchDashboard(BatchItem batch) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => BatchesDashboardScreen(
+          batchId: batch.stableId,
+          batchName: batch.name,
+          status: batch.status,
+          startedAt: batch.startedAt,
+          dayLabel: batch.dayLabel,
+          birdsLabel: batch.birdsLabel,
+        ),
+      ),
+    );
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  Future<void> _refreshDashboard() async {
+    try {
+      await BatchStore.instance.loadForCurrentUser();
+      MonitoringStore.instance.start();
+      if (mounted) {
+        setState(() {});
+      }
+    } on Object catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not refresh batches: $error'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -249,11 +403,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
           child: AnimatedBuilder(
             animation: BatchStore.instance,
             builder: (context, _) {
-              final batches = BatchStore.instance.batches;
+              final activeBatches = BatchStore.instance.activeBatches;
+              final historyBatches = BatchStore.instance.historyBatches;
+              final hasActiveBatch = activeBatches.isNotEmpty;
 
-              return ListView(
-                padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
-                children: [
+              return RefreshIndicator(
+                onRefresh: _refreshDashboard,
+                child: ListView(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
+                  children: [
                     Container(
                       width: double.infinity,
                       padding: const EdgeInsets.fromLTRB(18, 18, 18, 20),
@@ -361,10 +520,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           ),
                         ),
                         FilledButton.icon(
-                          onPressed: () => _openCreateBatch(showAsPopup: true),
+                          onPressed: hasActiveBatch
+                              ? null
+                              : () => _openCreateBatch(showAsPopup: true),
                           style: FilledButton.styleFrom(
-                            backgroundColor: const Color(0xFFDFF7E5),
+                            backgroundColor: hasActiveBatch
+                                ? const Color(0xFFE7ECE8)
+                                : const Color(0xFFDFF7E5),
+                            disabledBackgroundColor: const Color(0xFFE7ECE8),
                             foregroundColor: const Color(0xFF1E7D32),
+                            disabledForegroundColor: const Color(0xFF8A978F),
                             elevation: 0,
                             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
                             shape: RoundedRectangleBorder(
@@ -380,35 +545,46 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       ],
                     ),
                     const SizedBox(height: 10),
-                    ...batches.map(
+                    if (hasActiveBatch)
+                      const _BatchSectionHeader(
+                        title: 'ACTIVE BATCH',
+                        subtitle: 'Finish this batch before creating another one',
+                      )
+                    else
+                      const _EmptyBatchNotice(),
+                    ...activeBatches.map(
                       (batch) => Padding(
                         padding: const EdgeInsets.only(bottom: 12),
                         child: _BatchCard(
                           batch: batch,
                           onEdit: () => _editBatch(batch),
                           onDelete: () => _deleteBatch(batch),
-                          onTap: () async {
-                            await Navigator.of(context).push(
-                              MaterialPageRoute<void>(
-                                builder: (_) => BatchesDashboardScreen(
-                                  batchId: batch.stableId,
-                                  batchName: batch.name,
-                                  status: batch.status,
-                                  startedAt: batch.startedAt,
-                                  dayLabel: batch.dayLabel,
-                                  birdsLabel: batch.birdsLabel,
-                                ),
-                              ),
-                            );
-                            if (mounted) {
-                              setState(() {});
-                            }
-                          },
+                          onFinish: () => _finishBatch(batch),
+                          onTap: () => _openBatchDashboard(batch),
                         ),
                       ),
                     ),
-                    const SizedBox(height: 140),
-                ],
+                    const SizedBox(height: 8),
+                    if (historyBatches.isNotEmpty) ...[
+                      const _BatchSectionHeader(
+                        title: 'BATCH HISTORY',
+                        subtitle: 'Finished cycles remain available for records and reports',
+                      ),
+                      ...historyBatches.map(
+                        (batch) => Padding(
+                          padding: const EdgeInsets.only(bottom: 12),
+                          child: _BatchCard(
+                            batch: batch,
+                            onEdit: () => _editBatch(batch),
+                            onDelete: () => _deleteBatch(batch),
+                            onTap: () => _openBatchDashboard(batch),
+                          ),
+                        ),
+                      ),
+                    ],
+                      const SizedBox(height: 140),
+                  ],
+                ),
               );
             },
           ),
@@ -470,17 +646,91 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 }
 
+class _BatchSectionHeader extends StatelessWidget {
+  final String title;
+  final String subtitle;
+
+  const _BatchSectionHeader({
+    required this.title,
+    required this.subtitle,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 4, bottom: 10),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w900,
+                    color: Color(0xFF58705A),
+                    letterSpacing: 0.5,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  subtitle,
+                  style: const TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF8A9A8F),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _EmptyBatchNotice extends StatelessWidget {
+  const _EmptyBatchNotice();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.76),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: const Color(0xFFDCE9DE)),
+      ),
+      child: const Text(
+        'No active batch right now. Create one to start a new cycle.',
+        style: TextStyle(
+          color: Color(0xFF66766B),
+          fontSize: 12,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
+}
+
 class _BatchCard extends StatelessWidget {
   final BatchItem batch;
   final VoidCallback onTap;
   final VoidCallback onEdit;
   final VoidCallback onDelete;
+  final VoidCallback? onFinish;
 
   const _BatchCard({
     required this.batch,
     required this.onTap,
     required this.onEdit,
     required this.onDelete,
+    this.onFinish,
   });
 
   @override
@@ -576,6 +826,16 @@ class _BatchCard extends StatelessWidget {
                         onTap: onDelete,
                       ),
                       const SizedBox(width: 8),
+                      if (onFinish != null) ...[
+                        _CircleActionButton(
+                          icon: Icons.flag_circle_outlined,
+                          backgroundColor: const Color(0xFFEAFBF0),
+                          borderColor: const Color(0xFFC7EFD1),
+                          iconColor: const Color(0xFF17863A),
+                          onTap: onFinish!,
+                        ),
+                        const SizedBox(width: 8),
+                      ],
                       _CircleActionButton(
                         icon: Icons.chevron_right_rounded,
                         backgroundColor: const Color(0xFFF6F8FB),

@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../widgets/control_motion.dart';
+
 class LightingDevice {
   final String name;
   final String id;
@@ -62,9 +64,12 @@ class LightingSystemDropdownCard extends StatelessWidget {
   final bool expanded;
   final List<LightingDevice> devices;
   final bool masterEnabled;
+  final bool overrideActive;
+  final bool deviceOnline;
   final VoidCallback onTapHeader;
-  final VoidCallback onAddDevice;
   final ValueChanged<bool> onToggleMaster;
+  final VoidCallback onForceStop;
+  final VoidCallback onResumeAuto;
   final void Function(int index) onAddSchedule;
   final void Function(int index) onDeleteDevice;
   final void Function(int index, bool value) onToggleDevice;
@@ -76,9 +81,12 @@ class LightingSystemDropdownCard extends StatelessWidget {
     required this.expanded,
     required this.devices,
     required this.masterEnabled,
+    required this.overrideActive,
+    required this.deviceOnline,
     required this.onTapHeader,
-    required this.onAddDevice,
     required this.onToggleMaster,
+    required this.onForceStop,
+    required this.onResumeAuto,
     required this.onAddSchedule,
     required this.onDeleteDevice,
     required this.onToggleDevice,
@@ -89,8 +97,7 @@ class LightingSystemDropdownCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final hasDevice = devices.isNotEmpty;
-    final subtitle =
-        hasDevice ? '${devices.length} Device${devices.length == 1 ? '' : 's'} Connected' : 'No Devices';
+    final subtitle = deviceOnline ? 'Online' : 'Offline';
     final headerColor = hasDevice ? const Color(0xFFFFF6D6) : const Color(0xFFFFF9E8);
 
     return Container(
@@ -158,16 +165,18 @@ class LightingSystemDropdownCard extends StatelessWidget {
               ),
             ),
           ),
-          AnimatedCrossFade(
-            duration: const Duration(milliseconds: 220),
-            crossFadeState: expanded ? CrossFadeState.showFirst : CrossFadeState.showSecond,
-            firstChild: Padding(
+          ControlReveal(
+            expanded: expanded,
+            child: Padding(
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
               child: Column(
                 children: [
                   _LightingRelayControlCard(
                     enabled: masterEnabled,
+                    overrideActive: overrideActive,
                     onChanged: onToggleMaster,
+                    onForceStop: onForceStop,
+                    onResumeAuto: onResumeAuto,
                   ),
                   const SizedBox(height: 12),
                   if (hasDevice)
@@ -196,35 +205,10 @@ class LightingSystemDropdownCard extends StatelessWidget {
                           ],
                         ),
                       );
-                    })
-                  else ...[
-                    const _EmptyLightingPlaceholder(),
-                  ],
-                  const SizedBox(height: 12),
-                  SizedBox(
-                    width: double.infinity,
-                    height: 48,
-                    child: OutlinedButton.icon(
-                      onPressed: onAddDevice,
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: const Color(0xFF8B5A1A),
-                        side: const BorderSide(color: Color(0xFFF0E0C7)),
-                        backgroundColor: const Color(0xFFFFF6EA),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(16),
-                        ),
-                      ),
-                      icon: const Icon(Icons.add, size: 18),
-                      label: const Text(
-                        'Add Lighting System Device',
-                        style: TextStyle(fontWeight: FontWeight.w700),
-                      ),
-                    ),
-                  ),
+                    }),
                 ],
               ),
             ),
-            secondChild: const SizedBox.shrink(),
           ),
         ],
       ),
@@ -234,22 +218,34 @@ class LightingSystemDropdownCard extends StatelessWidget {
 
 class _LightingRelayControlCard extends StatelessWidget {
   final bool enabled;
+  final bool overrideActive;
   final ValueChanged<bool> onChanged;
+  final VoidCallback onForceStop;
+  final VoidCallback onResumeAuto;
 
   const _LightingRelayControlCard({
     required this.enabled,
+    required this.overrideActive,
     required this.onChanged,
+    required this.onForceStop,
+    required this.onResumeAuto,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Container(
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 160),
+      curve: Curves.easeOutCubic,
       width: double.infinity,
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: enabled ? const Color(0xFFFFFCF2) : Colors.white,
         borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: const Color(0xFFE3E9E4)),
+        border: Border.all(
+          color: enabled
+              ? const Color(0xFFFFE9A8)
+              : const Color(0xFFE3E9E4),
+        ),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withOpacity(0.04),
@@ -258,50 +254,123 @@ class _LightingRelayControlCard extends StatelessWidget {
           ),
         ],
       ),
-      child: Row(
+      child: Column(
         children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: const [
-                Text(
-                  'Light Bulb Relay',
-                  style: TextStyle(
-                    color: Color(0xFF233047),
-                    fontSize: 15,
-                    fontWeight: FontWeight.w800,
+          Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Light Bulb Relay',
+                      style: TextStyle(
+                        color: Color(0xFF233047),
+                        fontSize: 15,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    const Text(
+                      'Controls relay K2 / IN2.\nBulb uses the separate power line.',
+                      style: TextStyle(
+                        color: Color(0xFF93A0B6),
+                        fontSize: 10,
+                        fontWeight: FontWeight.w800,
+                        height: 1.2,
+                      ),
+                    ),
+                    if (overrideActive) ...[
+                      const SizedBox(height: 6),
+                      const Text(
+                        'Manual override active',
+                        style: TextStyle(
+                          color: Color(0xFFB45309),
+                          fontSize: 10,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              const SizedBox(width: 10),
+              ControlAnimatedStatus(
+                text: enabled ? 'ON' : 'OFF',
+                style: TextStyle(
+                  color: enabled
+                      ? const Color(0xFFD28A00)
+                      : const Color(0xFF93A0B6),
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Switch(
+                value: enabled,
+                onChanged: onChanged,
+                activeColor: const Color(0xFFD28A00),
+                activeTrackColor: const Color(0xFFFFE9A8),
+                inactiveThumbColor: Colors.white,
+                inactiveTrackColor: const Color(0xFFD9E4D9),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          ControlActionSwitcher(
+            child: overrideActive
+                ? SizedBox(
+                    key: const ValueKey('lighting-resume-auto'),
+              width: double.infinity,
+              height: 40,
+              child: FilledButton.icon(
+                onPressed: onResumeAuto,
+                style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFFD28A00),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
                   ),
                 ),
-                SizedBox(height: 6),
-                Text(
-                  'Controls relay K2 / IN2.\nBulb uses the separate power line.',
-                  style: TextStyle(
-                    color: Color(0xFF93A0B6),
-                    fontSize: 10,
-                    fontWeight: FontWeight.w800,
-                    height: 1.2,
+                icon: const Icon(Icons.autorenew_rounded, size: 17),
+                label: const Text('Resume Temperature Auto'),
+              ),
+            )
+                : enabled
+                    ? SizedBox(
+                        key: const ValueKey('lighting-force-stop'),
+              width: double.infinity,
+              height: 40,
+              child: OutlinedButton.icon(
+                onPressed: onForceStop,
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFFB42318),
+                  side: const BorderSide(color: Color(0xFFF1C6C2)),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
                   ),
                 ),
-              ],
+                icon: const Icon(Icons.power_settings_new_rounded, size: 17),
+                label: const Text('Force Stop for 30 Minutes'),
+              ),
+            )
+                    : Container(
+                        key: const ValueKey('lighting-ready'),
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFFAEC),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: const Color(0xFFF2E3B8)),
+              ),
+              child: const Text(
+                'Auto mode is ready. The switch creates a 30-minute manual override.',
+                style: TextStyle(
+                  color: Color(0xFF806428),
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
             ),
-          ),
-          const SizedBox(width: 10),
-          Text(
-            enabled ? 'ON' : 'OFF',
-            style: TextStyle(
-              color: enabled ? const Color(0xFFD28A00) : const Color(0xFF93A0B6),
-              fontSize: 11,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-          const SizedBox(width: 8),
-          Switch(
-            value: enabled,
-            onChanged: onChanged,
-            activeColor: const Color(0xFFD28A00),
-            activeTrackColor: const Color(0xFFFFE9A8),
-            inactiveThumbColor: Colors.white,
-            inactiveTrackColor: const Color(0xFFD9E4D9),
           ),
         ],
       ),
@@ -325,23 +394,7 @@ class _LightingDeviceCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (device == null) {
-      return Container(
-        width: double.infinity,
-        height: 54,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: const Color(0xFFF8FAFD),
-          borderRadius: BorderRadius.circular(14),
-        ),
-        child: const Text(
-          'No devices added yet',
-          style: TextStyle(
-            color: Color(0xFF9AA8BD),
-            fontSize: 12,
-            fontWeight: FontWeight.w700,
-          ),
-        ),
-      );
+      return const SizedBox.shrink();
     }
 
     return Container(
@@ -393,10 +446,12 @@ class _LightingDeviceCard extends StatelessWidget {
                 visualDensity: VisualDensity.compact,
                 tooltip: 'Delete device',
               ),
-              const Text(
-                'OFF',
+              ControlAnimatedStatus(
+                text: device!.enabled ? 'ON' : 'OFF',
                 style: TextStyle(
-                  color: Color(0xFF93A0B6),
+                  color: device!.enabled
+                      ? const Color(0xFF24B26A)
+                      : const Color(0xFF93A0B6),
                   fontSize: 11,
                   fontWeight: FontWeight.w800,
                 ),
@@ -628,31 +683,6 @@ class _LightingScheduleCard extends StatelessWidget {
                   .toList(),
             ),
         ],
-      ),
-    );
-  }
-}
-
-class _EmptyLightingPlaceholder extends StatelessWidget {
-  const _EmptyLightingPlaceholder();
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      height: 44,
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        color: const Color(0xFFF8FAFD),
-        borderRadius: BorderRadius.circular(14),
-      ),
-      child: const Text(
-        'No devices added yet',
-        style: TextStyle(
-          color: Color(0xFF9AA8BD),
-          fontSize: 12,
-          fontWeight: FontWeight.w700,
-        ),
       ),
     );
   }

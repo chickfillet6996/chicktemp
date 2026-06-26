@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 import 'dart:math' as math;
 
@@ -14,6 +15,7 @@ import '../models/device_config_store.dart';
 import '../models/environmental_log_store.dart';
 import '../models/monitoring_store.dart';
 import '../models/report_record_store.dart';
+import '../widgets/chicktemp_loading.dart';
 import '../widgets/splash_background.dart';
 import '../widgets/user_avatar_content.dart';
 import 'profile_screen.dart';
@@ -63,27 +65,24 @@ class _ReportsScreenState extends State<ReportsScreen> {
   String? _batchLoadError;
   int _selectedNavIndex = 2;
 
-  List<String> get _batches =>
-      BatchStore.instance.batches.map((batch) => batch.name).toSet().toList();
+  List<String> get _activeBatchNames {
+    final activeBatch = BatchStore.instance.activeBatch;
+    return activeBatch == null ? const [] : [activeBatch.name];
+  }
 
   BatchTelemetry get _currentTelemetry =>
       MonitoringStore.instance.snapshotFor(_selectedBatch);
 
-  bool get _hasBatchSelection => _batches.isNotEmpty;
+  bool get _hasActiveBatch => _activeBatchNames.isNotEmpty;
 
   BatchItem? get _selectedBatchItem =>
+      BatchStore.instance.activeBatch ??
       BatchStore.instance.findByName(_selectedBatch);
 
   @override
   void initState() {
     super.initState();
-    final initialBatch = widget.initialBatchName;
-    _selectedBatch =
-        initialBatch != null && _batches.contains(initialBatch)
-        ? initialBatch
-        : _batches.isNotEmpty
-        ? _batches.first
-        : 'Broiler Batch 1';
+    _selectedBatch = _resolveActiveBatchName();
     _loadBatchData();
   }
 
@@ -124,24 +123,87 @@ class _ReportsScreenState extends State<ReportsScreen> {
       return batch.stableId;
     }
 
-    return _selectedBatch
+    return _safeKey(_selectedBatch);
+  }
+
+  Set<String> get _selectedBatchKeys {
+    final batch = BatchStore.instance.findByName(_selectedBatch);
+    final keys = <String>{
+      _selectedBatch,
+      _safeKey(_selectedBatch),
+      if (batch != null) ...{batch.stableId, _safeKey(batch.stableId)},
+    };
+
+    final activeBatchNames = _activeBatchNames;
+    if (activeBatchNames.length <= 1 ||
+        activeBatchNames.contains(_selectedBatch)) {
+      keys.add('default_batch');
+    }
+
+    return keys;
+  }
+
+  Set<String> get _selectedReportRecordKeys {
+    final keys = <String>{
+      _selectedBatchId,
+      _selectedBatch,
+      _safeKey(_selectedBatch),
+    };
+
+    final activeBatchNames = _activeBatchNames;
+    if (activeBatchNames.length <= 1 ||
+        activeBatchNames.contains(_selectedBatch)) {
+      keys.add('default_batch');
+    }
+
+    return keys;
+  }
+
+  String _safeKey(String value) {
+    final key = value
         .trim()
         .toLowerCase()
         .replaceAll(RegExp(r'[^a-z0-9]+'), '_')
         .replaceAll(RegExp(r'_+'), '_')
         .replaceAll(RegExp(r'^_|_$'), '');
+    return key.isEmpty ? 'default_batch' : key;
   }
 
-  Set<String> get _selectedBatchKeys {
-    final batch = BatchStore.instance.findByName(_selectedBatch);
-    return {_selectedBatch, if (batch != null) batch.stableId, 'default_batch'};
+  String _resolveActiveBatchName() {
+    final activeBatch = BatchStore.instance.activeBatch;
+    if (activeBatch != null) {
+      return activeBatch.name;
+    }
+    final initialBatch = widget.initialBatchName;
+    if (initialBatch != null && initialBatch.trim().isNotEmpty) {
+      return initialBatch;
+    }
+    return 'No Active Batch';
   }
 
-  Future<void> _changeSelectedBatch(String value) async {
-    setState(() {
-      _selectedBatch = value;
-      _resetComposer();
-    });
+  bool _syncSelectedBatchToActive() {
+    final nextBatch = _resolveActiveBatchName();
+    if (_selectedBatch == nextBatch) {
+      return false;
+    }
+    _selectedBatch = nextBatch;
+    _resetComposer();
+    return true;
+  }
+
+  Future<void> _refreshReports() async {
+    try {
+      await BatchStore.instance.loadForCurrentUser();
+    } on Object {
+      // Reports can still refresh the currently cached batch data offline.
+    }
+    if (!mounted) {
+      return;
+    }
+    final changedBatch = _syncSelectedBatchToActive();
+    if (changedBatch) {
+      setState(() {});
+    }
     await _loadBatchData();
   }
 
@@ -154,14 +216,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
     try {
       final results = await Future.wait([
         EnvironmentalLogStore.instance.fetchRecentLogs(limit: 240),
-        ReportRecordStore.instance.fetchEntries(
-          batchId: _selectedBatchId,
-          type: ReportRecordType.event,
-        ),
-        ReportRecordStore.instance.fetchEntries(
-          batchId: _selectedBatchId,
-          type: ReportRecordType.maintenance,
-        ),
+        _fetchReportRecordsForSelectedBatch(ReportRecordType.event),
+        _fetchReportRecordsForSelectedBatch(ReportRecordType.maintenance),
         _safeLoadConfig(
           DeviceConfigStore.instance.loadVentilationConfig(
             batchName: _selectedBatch,
@@ -184,7 +240,11 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
       final logs =
           (results[0] as List<EnvironmentalLog>)
-              .where((log) => _selectedBatchKeys.contains(log.batchId))
+              .where((log) {
+                final logKey = _safeKey(log.batchId);
+                return _selectedBatchKeys.contains(log.batchId) ||
+                    _selectedBatchKeys.contains(logKey);
+              })
               .toList()
             ..sort((a, b) => b.recordedAt.compareTo(a.recordedAt));
       final events = (results[1] as List<ReportRecord>)
@@ -222,6 +282,30 @@ class _ReportsScreenState extends State<ReportsScreen> {
         _batchLoadError = error.toString();
       });
     }
+  }
+
+  Future<List<ReportRecord>> _fetchReportRecordsForSelectedBatch(
+    ReportRecordType type,
+  ) async {
+    final records = <ReportRecord>[];
+    final seen = <String>{};
+
+    for (final batchId in _selectedReportRecordKeys) {
+      final batchRecords = await ReportRecordStore.instance.fetchEntries(
+        batchId: batchId,
+        type: type,
+      );
+      for (final record in batchRecords) {
+        final key =
+            '${record.id}_${record.title}_${record.date}_${record.description}';
+        if (seen.add(key)) {
+          records.add(record);
+        }
+      }
+    }
+
+    records.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+    return records;
   }
 
   void _toggleComposer(_ComposerMode mode) {
@@ -268,12 +352,12 @@ class _ReportsScreenState extends State<ReportsScreen> {
     }
 
     final entry = entries[index];
+    final recordType = mode == _ComposerMode.event
+        ? ReportRecordType.event
+        : ReportRecordType.maintenance;
     try {
-      await ReportRecordStore.instance.deleteEntry(
-        batchId: _selectedBatchId,
-        type: mode == _ComposerMode.event
-            ? ReportRecordType.event
-            : ReportRecordType.maintenance,
+      await _deleteReportRecordFromAllKeys(
+        type: recordType,
         entryId: entry.id,
       );
 
@@ -344,13 +428,14 @@ class _ReportsScreenState extends State<ReportsScreen> {
               ? _currentEvents[_editingIndex!]
               : _currentMaintenanceEntries[_editingIndex!])
         : null;
+    final recordType = mode == _ComposerMode.event
+        ? ReportRecordType.event
+        : ReportRecordType.maintenance;
 
     try {
       final savedRecord = await ReportRecordStore.instance.saveEntry(
         batchId: _selectedBatchId,
-        type: mode == _ComposerMode.event
-            ? ReportRecordType.event
-            : ReportRecordType.maintenance,
+        type: recordType,
         entry: ReportRecord(
           id: existingEntry?.id ?? '',
           title: title,
@@ -359,6 +444,14 @@ class _ReportsScreenState extends State<ReportsScreen> {
           updatedAt: DateTime.now(),
         ),
       );
+      if (existingEntry != null) {
+        unawaited(
+          _deleteReportRecordFromLegacyKeys(
+            type: recordType,
+            entryId: existingEntry.id,
+          ),
+        );
+      }
 
       final savedEntry = _ReportEntry.fromRecord(savedRecord);
       if (!mounted) {
@@ -396,6 +489,39 @@ class _ReportsScreenState extends State<ReportsScreen> {
     );
   }
 
+  Future<void> _deleteReportRecordFromAllKeys({
+    required ReportRecordType type,
+    required String entryId,
+  }) async {
+    for (final batchId in _selectedReportRecordKeys) {
+      await ReportRecordStore.instance.deleteEntry(
+        batchId: batchId,
+        type: type,
+        entryId: entryId,
+      );
+    }
+  }
+
+  Future<void> _deleteReportRecordFromLegacyKeys({
+    required ReportRecordType type,
+    required String entryId,
+  }) async {
+    for (final batchId in _selectedReportRecordKeys) {
+      if (batchId == _selectedBatchId) {
+        continue;
+      }
+      try {
+        await ReportRecordStore.instance.deleteEntry(
+          batchId: batchId,
+          type: type,
+          entryId: entryId,
+        );
+      } on Object {
+        // Legacy cleanup should never block the saved current record.
+      }
+    }
+  }
+
   String get _tabHeaderTitle {
     switch (_selectedTab) {
       case _ReportsTab.reportCenter:
@@ -425,6 +551,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
       subtitle: 'Temperature, humidity, and latest environmental data',
       icon: Icons.thermostat_auto_rounded,
       color: Color(0xFF2E7D32),
+      supportsRange: true,
     ),
     _ReportDefinition(
       type: _ReportTemplate.mortality,
@@ -446,6 +573,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
       subtitle: 'Maintenance history and latest service notes',
       icon: Icons.build_circle_outlined,
       color: Color(0xFFE67E22),
+      supportsRange: true,
     ),
     _ReportDefinition(
       type: _ReportTemplate.batchSummary,
@@ -463,13 +591,25 @@ class _ReportsScreenState extends State<ReportsScreen> {
   }
 
   _ExportRange _selectedExportRange(_ReportTemplate type) {
-    return _exportRangeByTemplate[type] ?? _ExportRange.day;
+    return _exportRangeByTemplate[type] ??
+        (type == _ReportTemplate.maintenance
+            ? _ExportRange.week
+            : _ExportRange.day);
   }
 
   void _setExportRange(_ReportTemplate type, _ExportRange range) {
+    if (!_supportsExportRange(type)) {
+      return;
+    }
+
     setState(() {
       _exportRangeByTemplate[type] = range;
     });
+  }
+
+  bool _supportsExportRange(_ReportTemplate type) {
+    return type == _ReportTemplate.dailyEnvironmental ||
+        type == _ReportTemplate.maintenance;
   }
 
   Future<void> _exportReport(
@@ -478,11 +618,15 @@ class _ReportsScreenState extends State<ReportsScreen> {
   ) async {
     final exportRange = _selectedExportRange(type);
     final report = _buildReportPreview(type, telemetry, exportRange);
+    final includeRange = _supportsExportRange(type);
     try {
       final bytes = await _buildPdfBytes(report);
       await Printing.sharePdf(
         bytes: bytes,
-        filename: _buildPdfFileName(report.title, exportRange),
+        filename: _buildPdfFileName(
+          report.title,
+          includeRange ? exportRange : null,
+        ),
       );
     } catch (error) {
       if (!mounted) {
@@ -494,13 +638,17 @@ class _ReportsScreenState extends State<ReportsScreen> {
     }
   }
 
-  String _buildPdfFileName(String title, _ExportRange range) {
+  String _buildPdfFileName(String title, _ExportRange? range) {
     final safeTitle = title
         .toLowerCase()
         .replaceAll(RegExp(r'[^a-z0-9]+'), '_')
         .replaceAll(RegExp(r'_+'), '_')
         .replaceAll(RegExp(r'^_|_$'), '');
-    return '${safeTitle}_${range.name}_${DateFormat('yyyyMMdd_HHmm').format(DateTime.now())}.pdf';
+    final generatedAt = DateFormat('yyyyMMdd_HHmm').format(DateTime.now());
+    if (range == null) {
+      return '${safeTitle}_snapshot_$generatedAt.pdf';
+    }
+    return '${safeTitle}_${range.name}_$generatedAt.pdf';
   }
 
   Future<Map<String, dynamic>?> _safeLoadConfig(
@@ -553,13 +701,12 @@ class _ReportsScreenState extends State<ReportsScreen> {
     _ExportRange range,
   ) {
     final threshold = _rangeThreshold(range);
-    return entries.where((entry) {
-      final parsed = _tryParseEntryDate(entry.date);
-      if (parsed == null) {
-        return false;
-      }
+    final filtered = entries.where((entry) {
+      final parsed = _entryDateForRange(entry);
       return !parsed.isBefore(threshold);
-    }).toList();
+    }).toList()
+      ..sort(_compareEntriesByReportDate);
+    return filtered;
   }
 
   DateTime _rangeThreshold(_ExportRange range) {
@@ -573,20 +720,43 @@ class _ReportsScreenState extends State<ReportsScreen> {
     }
   }
 
+  DateTime _entryDateForRange(_ReportEntry entry) {
+    return _tryParseEntryDate(entry.date) ?? _dateOnly(entry.updatedAt);
+  }
+
+  DateTime _dateOnly(DateTime value) {
+    return DateTime(value.year, value.month, value.day);
+  }
+
+  int _compareEntriesByReportDate(_ReportEntry a, _ReportEntry b) {
+    final dateCompare = _entryDateForRange(b).compareTo(_entryDateForRange(a));
+    if (dateCompare != 0) {
+      return dateCompare;
+    }
+    return b.updatedAt.compareTo(a.updatedAt);
+  }
+
   DateTime? _tryParseEntryDate(String value) {
-    final match = RegExp(r'^(\d{2})/(\d{2})/(\d{4})$').firstMatch(value.trim());
-    if (match == null) {
+    final trimmed = value.trim();
+    if (trimmed.isEmpty) {
       return null;
     }
 
-    final day = int.tryParse(match.group(1) ?? '');
-    final month = int.tryParse(match.group(2) ?? '');
-    final year = int.tryParse(match.group(3) ?? '');
-    if (day == null || month == null || year == null) {
-      return null;
+    for (final pattern in const [
+      'dd/MM/yyyy',
+      'd/M/yyyy',
+      'yyyy-MM-dd',
+      'MMM d, yyyy',
+      'MMMM d, yyyy',
+    ]) {
+      try {
+        return _dateOnly(DateFormat(pattern).parseStrict(trimmed));
+      } on FormatException {
+        // Try the next supported date format.
+      }
     }
 
-    return DateTime(year, month, day);
+    return null;
   }
 
   String _exportRangeLabel(_ExportRange range) {
@@ -1232,7 +1402,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
 */
   }
 
-  _ReportPreviewData _buildMortalityReport(_ExportRange range) {
+  _ReportPreviewData _buildMortalityReport(_ExportRange _) {
     {
       final totalBirds = BatchStore.instance.totalBirdsFor(_selectedBatch);
       final deaths = BatchStore.instance.mortalityCountFor(_selectedBatch);
@@ -1243,10 +1413,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
       return _ReportPreviewData(
         title: 'Mortality Report',
-        subtitle:
-            '${_exportRangeLabel(range)} mortality and flock survival summary',
-        summary:
-            '$deaths recorded deaths out of $totalBirds birds for ${_exportRangeLabel(range).toLowerCase()} export.',
+        subtitle: 'Current mortality and flock survival summary',
+        summary: '$deaths recorded deaths out of $totalBirds birds.',
         stats: [
           _ReportStatData(label: 'Total Flock', value: '$totalBirds'),
           _ReportStatData(label: 'Deaths', value: '$deaths'),
@@ -1353,11 +1521,11 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
   _ReportPreviewData _buildDeviceActivityReport(
     BatchTelemetry telemetry,
-    _ExportRange range,
+    _ExportRange _,
   ) {
     {
       final deviceItems = _deviceUsageItems();
-      final logs = _logsForRange(_reportLogs(telemetry), range);
+      final logs = _reportLogs(telemetry);
       final enabledCount = deviceItems.where((item) => item.enabled).length;
       final activeSchedules = deviceItems.fold<int>(
         0,
@@ -1387,10 +1555,9 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
       return _ReportPreviewData(
         title: 'Device Activity Report',
-        subtitle:
-            '${_exportRangeLabel(range)} saved devices, active schedules, and live status',
+        subtitle: 'Current saved devices, active schedules, and live status',
         summary:
-            '$enabledCount of ${deviceItems.length} saved device(s) are active for ${_exportRangeLabel(range).toLowerCase()} export of ${_selectedBatchItem?.name ?? _selectedBatch}.',
+            '$enabledCount of ${deviceItems.length} saved device(s) are active for ${_selectedBatchItem?.name ?? _selectedBatch}.',
         stats: [
           _ReportStatData(
             label: 'Saved Devices',
@@ -1606,10 +1773,10 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
   _ReportPreviewData _buildBatchSummaryReport(
     BatchTelemetry telemetry,
-    _ExportRange range,
+    _ExportRange _,
   ) {
     final batch = _selectedBatchItem;
-    final logs = _logsForRange(_reportLogs(telemetry), range);
+    final logs = _reportLogs(telemetry);
     final latestLog = logs.isNotEmpty ? logs.last : null;
     final totalBirds = BatchStore.instance.totalBirdsFor(_selectedBatch);
     final deaths = BatchStore.instance.mortalityCountFor(_selectedBatch);
@@ -1621,10 +1788,9 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
     return _ReportPreviewData(
       title: 'Batch Summary Report',
-      subtitle:
-          '${_exportRangeLabel(range)} cycle summary for the selected batch',
+      subtitle: 'Current cycle summary for the selected batch',
       summary:
-          '${batch?.name ?? _selectedBatch} is currently ${batch?.status ?? 'ACTIVE'} for ${_exportRangeLabel(range).toLowerCase()} export.',
+          '${batch?.name ?? _selectedBatch} is currently ${batch?.status ?? 'ACTIVE'}.',
       stats: [
         _ReportStatData(label: 'Status', value: batch?.status ?? 'ACTIVE'),
         _ReportStatData(label: 'Total Birds', value: '$totalBirds'),
@@ -1808,8 +1974,13 @@ class _ReportsScreenState extends State<ReportsScreen> {
     return AnimatedBuilder(
       animation: MonitoringStore.instance,
       builder: (context, _) {
-        if (_hasBatchSelection && !_batches.contains(_selectedBatch)) {
-          _selectedBatch = _batches.first;
+        final changedBatch = _syncSelectedBatchToActive();
+        if (changedBatch) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) {
+              _loadBatchData();
+            }
+          });
         }
 
         final telemetry = _currentTelemetry;
@@ -1921,8 +2092,9 @@ class _ReportsScreenState extends State<ReportsScreen> {
                   const SizedBox(height: 18),
                   Expanded(
                     child: RefreshIndicator(
-                      onRefresh: _loadBatchData,
+                      onRefresh: _refreshReports,
                       child: ListView(
+                        physics: const AlwaysScrollableScrollPhysics(),
                         padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
                         children: [
                           Row(
@@ -1944,10 +2116,10 @@ class _ReportsScreenState extends State<ReportsScreen> {
                                   vertical: 8,
                                 ),
                                 decoration: BoxDecoration(
-                                  color: Colors.white,
+                                  color: const Color(0xFFEAFBF0),
                                   borderRadius: BorderRadius.circular(16),
                                   border: Border.all(
-                                    color: const Color(0xFFE3E9E4),
+                                    color: const Color(0xFFBFE8C6),
                                   ),
                                   boxShadow: [
                                     BoxShadow(
@@ -1957,38 +2129,28 @@ class _ReportsScreenState extends State<ReportsScreen> {
                                     ),
                                   ],
                                 ),
-                                child: DropdownButtonHideUnderline(
-                                  child: DropdownButton<String>(
-                                    value: _batches.contains(_selectedBatch)
-                                        ? _selectedBatch
-                                        : null,
-                                    focusColor: const Color(
-                                      0xFF0BB13F,
-                                    ).withOpacity(0.08),
-                                    borderRadius: BorderRadius.circular(16),
-                                    icon: const Icon(
-                                      Icons.keyboard_arrow_down_rounded,
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(
+                                      _hasActiveBatch
+                                          ? Icons.check_circle_rounded
+                                          : Icons.info_outline_rounded,
+                                      color: const Color(0xFF0B8F39),
+                                      size: 16,
                                     ),
-                                    items: _batches
-                                        .map(
-                                          (batch) => DropdownMenuItem<String>(
-                                            value: batch,
-                                            child: Text(
-                                              batch,
-                                              style: const TextStyle(
-                                                fontWeight: FontWeight.w700,
-                                                color: Color(0xFF26412C),
-                                              ),
-                                            ),
-                                          ),
-                                        )
-                                        .toList(),
-                                    onChanged: (value) {
-                                      if (value != null) {
-                                        _changeSelectedBatch(value);
-                                      }
-                                    },
-                                  ),
+                                    const SizedBox(width: 6),
+                                    Text(
+                                      _hasActiveBatch
+                                          ? 'Active Batch'
+                                          : 'No Active Batch',
+                                      style: const TextStyle(
+                                        color: Color(0xFF0B8F39),
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w900,
+                                      ),
+                                    ),
+                                  ],
                                 ),
                               ),
                             ],
@@ -2126,6 +2288,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
                                 'Loading event records...',
                                 icon: Icons.hourglass_top_rounded,
                                 iconColor: const Color(0xFF3D7BFF),
+                                isLoading: true,
                               ),
                             if (_currentEvents.isNotEmpty)
                               ..._buildEntries(
@@ -2143,6 +2306,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
                                 'Loading maintenance records...',
                                 icon: Icons.hourglass_top_rounded,
                                 iconColor: const Color(0xFF3D7BFF),
+                                isLoading: true,
                               ),
                             if (_currentMaintenanceEntries.isNotEmpty)
                               ..._buildEntries(
@@ -2224,6 +2388,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
     String message, {
     required IconData icon,
     required Color iconColor,
+    bool isLoading = false,
   }) {
     return Container(
       width: double.infinity,
@@ -2235,7 +2400,13 @@ class _ReportsScreenState extends State<ReportsScreen> {
       ),
       child: Row(
         children: [
-          Icon(icon, color: iconColor),
+          if (isLoading)
+            ChickTempLoading.compact(
+              size: 24,
+              color: iconColor,
+            )
+          else
+            Icon(icon, color: iconColor),
           const SizedBox(width: 10),
           Expanded(
             child: Text(
@@ -2344,6 +2515,7 @@ class _ReportDefinition {
   final String subtitle;
   final IconData icon;
   final Color color;
+  final bool supportsRange;
 
   const _ReportDefinition({
     required this.type,
@@ -2351,6 +2523,7 @@ class _ReportDefinition {
     required this.subtitle,
     required this.icon,
     required this.color,
+    this.supportsRange = false,
   });
 }
 
@@ -2561,11 +2734,17 @@ class _ExpandableReportCard extends StatelessWidget {
                             ),
                           ),
                           const SizedBox(width: 10),
-                          _ExportRangeDropdown(
-                            value: selectedRange,
-                            color: definition.color,
-                            onChanged: onRangeChanged,
-                          ),
+                          if (definition.supportsRange)
+                            _ExportRangeDropdown(
+                              value: selectedRange,
+                              color: definition.color,
+                              onChanged: onRangeChanged,
+                            )
+                          else
+                            _ReportScopePill(
+                              label: 'Current Snapshot',
+                              color: definition.color,
+                            ),
                         ],
                       ),
                       const SizedBox(height: 10),
@@ -2750,6 +2929,36 @@ class _ExportRangeDropdown extends StatelessWidget {
               onChanged(nextValue);
             }
           },
+        ),
+      ),
+    );
+  }
+}
+
+class _ReportScopePill extends StatelessWidget {
+  final String label;
+  final Color color;
+
+  const _ReportScopePill({
+    required this.label,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withOpacity(0.18)),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w800,
+          color: color,
         ),
       ),
     );

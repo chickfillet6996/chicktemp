@@ -1,0 +1,212 @@
+@startuml
+title CHICKTEMP FARM MANAGEMENT MOBILE APP - USER INTERACTION MODEL\n(UML 2.5 Use Case Diagram)
+
+left to right direction
+
+skinparam backgroundColor #FFFFFF
+skinparam shadowing false
+skinparam roundcorner 18
+skinparam packageStyle rectangle
+skinparam usecase {
+  BackgroundColor #FFF4D8
+  BorderColor #D5A85E
+  FontColor #1F2937
+}
+skinparam rectangle {
+  BorderColor #7A8AA0
+  FontColor #1F2937
+}
+skinparam actor {
+  BorderColor #344054
+  FontColor #1F2937
+}
+
+actor "Farm Manager /\nUser" as User
+actor "ESP32 Sensor\nDevice" as ESP32
+database "Firebase\nRealtime Database" as Firebase
+cloud "Support Email\nService" as SupportEmail
+
+rectangle "CHICKTEMP Farm Management Mobile App" as App {
+  package "Account & Security Services" as Account {
+    usecase "Create Account" as UC_CreateAccount
+    usecase "Login" as UC_Login
+    usecase "Remember Login" as UC_RememberLogin
+    usecase "Reset Password" as UC_ResetPassword
+    usecase "Manage Account\nProfile & Security" as UC_ManageProfile
+    usecase "Update Personal Details\n(Name, Email, Phone, Photo)" as UC_UpdateProfile
+    usecase "Change Password" as UC_ChangePassword
+    usecase "Logout" as UC_Logout
+  }
+
+  package "Application Preferences & Alerts" as Alerts {
+    usecase "View System Alerts" as UC_ViewAlerts
+    usecase "Configure Alert\nPreferences" as UC_ConfigureAlerts
+    usecase "Mark Alerts\nRead / Unread" as UC_MarkAlerts
+    usecase "Receive Temperature,\nDevice & Schedule Alerts" as UC_ReceiveAlerts
+    usecase "High Temperature Alert" as UC_HighTempAlert
+    usecase "Low Temperature Alert" as UC_LowTempAlert
+    usecase "Device Offline Alert" as UC_DeviceOfflineAlert
+    usecase "Feeding Schedule Reminder" as UC_FeedingReminder
+    usecase "Water Schedule Reminder" as UC_WaterReminder
+    usecase "Lighting Schedule Reminder" as UC_LightingReminder
+  }
+
+  rectangle "Environmental Control System\n(Sub-System Layer)" as Environmental {
+    package "Dashboard, Monitoring & Analytics" as Monitoring {
+      usecase "View Main Dashboard" as UC_ViewMainDashboard
+      usecase "View Batch Dashboard" as UC_ViewBatchDashboard
+      usecase "View Real-Time\nEnvironmental Data" as UC_ViewRealtime
+      usecase "View Temperature" as UC_ViewTemperature
+      usecase "View Humidity" as UC_ViewHumidity
+      usecase "View Water Level" as UC_ViewWaterLevel
+      usecase "View Feed Level" as UC_ViewFeedLevel
+      usecase "View Last Recorded\nData When Offline" as UC_ViewOfflineData
+      usecase "View Analytics Dashboard" as UC_ViewAnalytics
+      usecase "View Temperature &\nHumidity Trends" as UC_ViewTrends
+      usecase "View Mortality &\nSurvival Metrics" as UC_ViewMortalityMetrics
+      usecase "View Device Usage\nSummary" as UC_ViewDeviceUsage
+    }
+
+    package "Operational Control" as Control {
+      usecase "Manage Device Controls" as UC_ManageControls
+      usecase "Configure Temperature\nAutomation Rules" as UC_TempAutomation
+      usecase "Set Minimum / Maximum\nTemperature Thresholds" as UC_SetThresholds
+      usecase "Control Ventilation Fan" as UC_ControlFan
+      usecase "Adjust Fan Speed" as UC_AdjustFanSpeed
+      usecase "Control Feeder Servo" as UC_ControlFeeder
+      usecase "Control Water Pump" as UC_ControlWater
+      usecase "Control Lighting Relay" as UC_ControlLighting
+      usecase "Set Lighting Brightness" as UC_SetBrightness
+      usecase "Manage Feeding Schedule" as UC_FeedingSchedule
+      usecase "Manage Water Schedule" as UC_WaterSchedule
+      usecase "Manage Lighting Schedule" as UC_LightingSchedule
+      usecase "Enable / Disable Devices" as UC_ToggleDevices
+      usecase "Remove Device" as UC_RemoveDevice
+    }
+
+    package "Reports & Records" as Reports {
+      usecase "Manage Reports" as UC_ManageReports
+      usecase "Generate Daily\nEnvironmental Report" as UC_DailyReport
+      usecase "Generate Mortality Report" as UC_MortalityReport
+      usecase "Generate Device\nActivity Report" as UC_DeviceReport
+      usecase "Generate Maintenance Report" as UC_MaintenanceReport
+      usecase "Generate Batch\nSummary Report" as UC_BatchSummaryReport
+      usecase "Export Report as PDF" as UC_ExportPdf
+      usecase "Record Event Log" as UC_RecordEvent
+      usecase "Record Maintenance Log" as UC_RecordMaintenance
+      usecase "View Environmental\nHistory" as UC_ViewHistory
+    }
+
+    package "Batch & Poultry Asset Management" as Batch {
+      usecase "Manage Poultry Batches" as UC_ManageBatches
+      usecase "Create Batch" as UC_CreateBatch
+      usecase "Edit Batch Details" as UC_EditBatch
+      usecase "Delete Batch" as UC_DeleteBatch
+      usecase "Update Grow-Out Day" as UC_UpdateGrowDay
+      usecase "Manage Mortality Records" as UC_ManageMortality
+      usecase "Record Dead Chickens" as UC_RecordDeaths
+      usecase "View Mortality History" as UC_ViewMortalityHistory
+      usecase "Analyze Mortality &\nSurvival Rate" as UC_AnalyzeMortality
+    }
+  }
+
+  package "Support & Information" as Support {
+    usecase "Access Support Services" as UC_AccessSupport
+    usecase "View Help Center & FAQs" as UC_HelpCenter
+    usecase "Contact Customer Support" as UC_ContactSupport
+    usecase "View About App" as UC_AboutApp
+    usecase "View App Policies\n& Procedures" as UC_Policies
+  }
+}
+
+User --> UC_CreateAccount
+User --> UC_Login
+User --> UC_ResetPassword
+User --> UC_ManageProfile
+User --> UC_Logout
+User --> UC_ViewAlerts
+User --> UC_ViewMainDashboard
+User --> UC_ViewBatchDashboard
+User --> UC_ViewAnalytics
+User --> UC_ManageControls
+User --> UC_ManageReports
+User --> UC_ManageBatches
+User --> UC_ManageMortality
+User --> UC_AccessSupport
+
+UC_Login .> UC_RememberLogin : <<extend>>
+UC_ManageProfile .> UC_UpdateProfile : <<include>>
+UC_ManageProfile .> UC_ChangePassword : <<include>>
+
+UC_ViewAlerts .> UC_ConfigureAlerts : <<include>>
+UC_ViewAlerts .> UC_MarkAlerts : <<include>>
+UC_ViewAlerts .> UC_ReceiveAlerts : <<include>>
+UC_ReceiveAlerts .> UC_HighTempAlert : <<extend>>
+UC_ReceiveAlerts .> UC_LowTempAlert : <<extend>>
+UC_ReceiveAlerts .> UC_DeviceOfflineAlert : <<extend>>
+UC_ReceiveAlerts .> UC_FeedingReminder : <<extend>>
+UC_ReceiveAlerts .> UC_WaterReminder : <<extend>>
+UC_ReceiveAlerts .> UC_LightingReminder : <<extend>>
+
+UC_ViewMainDashboard .> UC_ManageBatches : <<include>>
+UC_ViewBatchDashboard .> UC_ViewRealtime : <<include>>
+UC_ViewBatchDashboard .> UC_UpdateGrowDay : <<extend>>
+UC_ViewRealtime .> UC_ViewTemperature : <<include>>
+UC_ViewRealtime .> UC_ViewHumidity : <<include>>
+UC_ViewRealtime .> UC_ViewWaterLevel : <<include>>
+UC_ViewRealtime .> UC_ViewFeedLevel : <<include>>
+UC_ViewRealtime .> UC_ViewOfflineData : <<extend>>
+UC_ViewAnalytics .> UC_ViewTrends : <<include>>
+UC_ViewAnalytics .> UC_ViewMortalityMetrics : <<include>>
+UC_ViewAnalytics .> UC_ViewDeviceUsage : <<include>>
+
+UC_ManageControls .> UC_TempAutomation : <<include>>
+UC_TempAutomation .> UC_SetThresholds : <<include>>
+UC_ManageControls .> UC_ControlFan : <<include>>
+UC_ControlFan .> UC_AdjustFanSpeed : <<extend>>
+UC_ManageControls .> UC_ControlFeeder : <<include>>
+UC_ManageControls .> UC_ControlWater : <<include>>
+UC_ManageControls .> UC_ControlLighting : <<include>>
+UC_ControlLighting .> UC_SetBrightness : <<extend>>
+UC_ManageControls .> UC_FeedingSchedule : <<include>>
+UC_ManageControls .> UC_WaterSchedule : <<include>>
+UC_ManageControls .> UC_LightingSchedule : <<include>>
+UC_ManageControls .> UC_ToggleDevices : <<include>>
+UC_ManageControls .> UC_RemoveDevice : <<extend>>
+
+UC_ManageReports .> UC_DailyReport : <<include>>
+UC_ManageReports .> UC_MortalityReport : <<include>>
+UC_ManageReports .> UC_DeviceReport : <<include>>
+UC_ManageReports .> UC_MaintenanceReport : <<include>>
+UC_ManageReports .> UC_BatchSummaryReport : <<include>>
+UC_ManageReports .> UC_ExportPdf : <<extend>>
+UC_ManageReports .> UC_RecordEvent : <<include>>
+UC_ManageReports .> UC_RecordMaintenance : <<include>>
+UC_ManageReports .> UC_ViewHistory : <<include>>
+
+UC_ManageBatches .> UC_CreateBatch : <<include>>
+UC_ManageBatches .> UC_EditBatch : <<include>>
+UC_ManageBatches .> UC_DeleteBatch : <<extend>>
+UC_ManageBatches .> UC_UpdateGrowDay : <<extend>>
+UC_ManageMortality .> UC_RecordDeaths : <<include>>
+UC_ManageMortality .> UC_ViewMortalityHistory : <<include>>
+UC_ManageMortality .> UC_AnalyzeMortality : <<include>>
+
+UC_AccessSupport .> UC_HelpCenter : <<include>>
+UC_AccessSupport .> UC_ContactSupport : <<include>>
+UC_AccessSupport .> UC_AboutApp : <<include>>
+UC_AccessSupport .> UC_Policies : <<include>>
+
+ESP32 --> UC_ViewRealtime
+ESP32 --> UC_ViewHistory
+Firebase --> UC_CreateAccount
+Firebase --> UC_Login
+Firebase --> UC_ViewRealtime
+Firebase --> UC_ViewHistory
+Firebase --> UC_ManageBatches
+Firebase --> UC_ManageMortality
+Firebase --> UC_ManageReports
+Firebase --> UC_ManageControls
+SupportEmail --> UC_ContactSupport
+
+@enduml

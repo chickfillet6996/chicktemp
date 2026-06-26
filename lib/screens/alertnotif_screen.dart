@@ -7,6 +7,7 @@ import '../models/auth_store.dart';
 import '../models/batch_store.dart';
 import '../models/monitoring_store.dart';
 import '../models/temperature_settings_store.dart';
+import '../widgets/chicktemp_loading.dart';
 import '../widgets/settings_back_card.dart';
 import '../widgets/settings_overlay_sheet.dart';
 import '../widgets/user_avatar_content.dart';
@@ -430,13 +431,9 @@ class _LoadingCard extends StatelessWidget {
       ),
       child: const Row(
         children: [
-          SizedBox(
-            width: 18,
-            height: 18,
-            child: CircularProgressIndicator(
-              strokeWidth: 2.2,
-              color: Color(0xFF14AE5C),
-            ),
+          ChickTempLoading.compact(
+            size: 24,
+            color: Color(0xFF14AE5C),
           ),
           SizedBox(width: 12),
           Expanded(

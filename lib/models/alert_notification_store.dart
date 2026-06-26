@@ -5,10 +5,10 @@ import 'package:flutter/foundation.dart';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'auth_store.dart';
 import 'batch_store.dart';
 import 'device_config_store.dart';
 import 'monitoring_store.dart';
+import 'shared_workspace.dart';
 import 'temperature_settings_store.dart';
 
 enum AlertSeverity {
@@ -569,10 +569,12 @@ class AlertNotificationStore extends ChangeNotifier {
     return DateFormat('yyyyMMddHHmm').format(value);
   }
 
-  String get _currentUserKey => AuthStore.instance.currentUser?.id ?? 'guest';
+  String get _currentUserKey => SharedWorkspace.id;
 
-  String _preferencesKey(String userKey) => '${_preferencesPrefix}_$userKey';
-  String _readIdsKey(String userKey) => '${_readIdsPrefix}_$userKey';
+  String _preferencesKey(String userKey) =>
+      SharedWorkspace.localKey('${_preferencesPrefix}_$userKey');
+  String _readIdsKey(String userKey) =>
+      SharedWorkspace.localKey('${_readIdsPrefix}_$userKey');
 }
 
 class _ParsedSchedule {

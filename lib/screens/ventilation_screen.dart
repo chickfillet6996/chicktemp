@@ -3,16 +3,15 @@ import 'package:flutter/material.dart';
 import 'analytics_screen.dart';
 import '../models/auth_store.dart';
 import '../models/device_config_store.dart';
+import '../models/monitoring_store.dart';
+import '../widgets/chicktemp_loading.dart';
 import '../widgets/user_avatar_content.dart';
 import 'reports_screen.dart';
 
 class VentilationScreen extends StatefulWidget {
   final String batchName;
 
-  const VentilationScreen({
-    super.key,
-    required this.batchName,
-  });
+  const VentilationScreen({super.key, required this.batchName});
 
   @override
   State<VentilationScreen> createState() => _VentilationScreenState();
@@ -23,28 +22,28 @@ class _VentilationScreenState extends State<VentilationScreen> {
   int _selectedNavIndex = 0;
   bool _expanded = true;
   bool _isLoading = true;
+  bool _mainFanEnabled = false;
 
   bool get _hasDevices => _devices.isNotEmpty;
 
   @override
   void initState() {
     super.initState();
+    MonitoringStore.instance.addListener(_onTelemetryChanged);
+    MonitoringStore.instance.start();
     _loadSavedDevices();
   }
 
-  void _addDevice(_FanDeviceDraft device) {
-    setState(() {
-      _devices.insert(
-        0,
-        _FanDevice(
-          name: device.name,
-          id: device.id,
-          type: device.type,
-          description: device.description,
-        ),
-      );
-    });
-    _persistDevices();
+  @override
+  void dispose() {
+    MonitoringStore.instance.removeListener(_onTelemetryChanged);
+    super.dispose();
+  }
+
+  void _onTelemetryChanged() {
+    if (mounted) {
+      setState(() {});
+    }
   }
 
   void _removeDeviceAt(int index) {
@@ -68,19 +67,11 @@ class _VentilationScreenState extends State<VentilationScreen> {
     _persistDevices();
   }
 
-  Future<void> _openAddDeviceSheet() async {
-    final device = await showModalBottomSheet<_FanDeviceDraft>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (_) => AddDeviceSheet(batchName: widget.batchName),
-    );
-
-    if (!mounted || device == null) {
-      return;
-    }
-
-    _addDevice(device);
+  void _setMainFanEnabled(bool value) {
+    setState(() {
+      _mainFanEnabled = value;
+    });
+    _persistDevices();
   }
 
   Future<void> _loadSavedDevices() async {
@@ -101,6 +92,7 @@ class _VentilationScreenState extends State<VentilationScreen> {
         _devices
           ..clear()
           ..addAll(savedDevices);
+        _mainFanEnabled = data?['main_enabled'] == true;
         _expanded = data?['expanded'] as bool? ?? true;
         _isLoading = false;
       });
@@ -118,9 +110,14 @@ class _VentilationScreenState extends State<VentilationScreen> {
       await DeviceConfigStore.instance.saveVentilationConfig(
         batchName: widget.batchName,
         data: {
+          'main_enabled': _mainFanEnabled,
           'expanded': _expanded,
           'devices': _devices.map((device) => device.toJson()).toList(),
         },
+      );
+      await DeviceConfigStore.instance.saveVentilationFanControl(
+        batchName: widget.batchName,
+        enabled: _mainFanEnabled || _devices.any((device) => device.enabled),
       );
     } on Object catch (error) {
       if (mounted) {
@@ -137,9 +134,8 @@ class _VentilationScreenState extends State<VentilationScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final subtitle = _hasDevices
-        ? '${_devices.length} Device${_devices.length == 1 ? '' : 's'} Connected'
-        : 'No Devices';
+    final telemetry = MonitoringStore.instance.snapshotFor(widget.batchName);
+    final subtitle = telemetry.isLive ? 'Online' : 'Offline';
 
     return Scaffold(
       extendBody: true,
@@ -150,17 +146,26 @@ class _VentilationScreenState extends State<VentilationScreen> {
             Positioned(
               top: -90,
               right: -80,
-              child: _SoftShape(color: const Color(0xFF2E7D32).withOpacity(0.08), size: 240),
+              child: _SoftShape(
+                color: const Color(0xFF2E7D32).withOpacity(0.08),
+                size: 240,
+              ),
             ),
             Positioned(
               top: 150,
               left: -70,
-              child: _SoftShape(color: const Color(0xFFBFE8C6).withOpacity(0.22), size: 190),
+              child: _SoftShape(
+                color: const Color(0xFFBFE8C6).withOpacity(0.22),
+                size: 190,
+              ),
             ),
             Positioned(
               bottom: 110,
               right: -80,
-              child: _SoftShape(color: const Color(0xFFBFE8C6).withOpacity(0.18), size: 260),
+              child: _SoftShape(
+                color: const Color(0xFFBFE8C6).withOpacity(0.18),
+                size: 260,
+              ),
             ),
             ListView(
               padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
@@ -185,7 +190,11 @@ class _VentilationScreenState extends State<VentilationScreen> {
                           children: [
                             Row(
                               children: [
-                                Icon(Icons.circle, size: 8, color: Colors.white70),
+                                Icon(
+                                  Icons.circle,
+                                  size: 8,
+                                  color: Colors.white70,
+                                ),
                                 SizedBox(width: 8),
                                 Text(
                                   'CHICKTEMP',
@@ -232,7 +241,9 @@ class _VentilationScreenState extends State<VentilationScreen> {
                         child: UserAvatarContent(
                           initials: AuthStore.instance.currentUserInitials,
                           profilePhotoBase64:
-                              AuthStore.instance.currentUser
+                              AuthStore
+                                  .instance
+                                  .currentUser
                                   ?.profilePhotoBase64 ??
                               '',
                           textStyle: const TextStyle(
@@ -246,7 +257,10 @@ class _VentilationScreenState extends State<VentilationScreen> {
                   ),
                 ),
                 const SizedBox(height: 18),
-                _BackPill(label: 'Back to ${widget.batchName}', onTap: () => Navigator.of(context).pop()),
+                _BackPill(
+                  label: 'Back to ${widget.batchName}',
+                  onTap: () => Navigator.of(context).pop(),
+                ),
                 const SizedBox(height: 16),
                 const Text(
                   'CLIMATE & ENVIRONMENT',
@@ -298,7 +312,11 @@ class _VentilationScreenState extends State<VentilationScreen> {
                                   color: const Color(0xFFCAF2D3),
                                   borderRadius: BorderRadius.circular(14),
                                 ),
-                                child: const Icon(Icons.air_rounded, color: Color(0xFF118743), size: 24),
+                                child: const Icon(
+                                  Icons.air_rounded,
+                                  color: Color(0xFF118743),
+                                  size: 24,
+                                ),
                               ),
                               const SizedBox(width: 12),
                               Expanded(
@@ -335,7 +353,11 @@ class _VentilationScreenState extends State<VentilationScreen> {
                                     color: const Color(0xFFC9F1D3),
                                     borderRadius: BorderRadius.circular(999),
                                   ),
-                                  child: const Icon(Icons.keyboard_arrow_down_rounded, color: Color(0xFF0F7A3B), size: 20),
+                                  child: const Icon(
+                                    Icons.keyboard_arrow_down_rounded,
+                                    color: Color(0xFF0F7A3B),
+                                    size: 20,
+                                  ),
                                 ),
                               ),
                             ],
@@ -344,33 +366,15 @@ class _VentilationScreenState extends State<VentilationScreen> {
                       ),
                       if (_expanded) ...[
                         const SizedBox(height: 12),
+                        _FanRelayControlCard(
+                          enabled: _mainFanEnabled,
+                          onChanged: _setMainFanEnabled,
+                        ),
+                        const SizedBox(height: 12),
                         if (_isLoading)
                           _buildLoadingState()
                         else if (_hasDevices)
-                          _buildDeviceList()
-                        else
-                          _buildEmptyState(),
-                        const SizedBox(height: 12),
-                        SizedBox(
-                          width: double.infinity,
-                          height: 46,
-                          child: OutlinedButton.icon(
-                            onPressed: _openAddDeviceSheet,
-                            style: OutlinedButton.styleFrom(
-                              foregroundColor: const Color(0xFF355C79),
-                              side: const BorderSide(color: Color(0xFFDDE7E0)),
-                              backgroundColor: Colors.white,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(16),
-                              ),
-                            ),
-                            icon: const Icon(Icons.add, size: 18),
-                            label: const Text(
-                              'Add Ventilation Fans Device',
-                              style: TextStyle(fontWeight: FontWeight.w700),
-                            ),
-                          ),
-                        ),
+                          _buildDeviceList(),
                       ],
                     ],
                   ),
@@ -389,9 +393,7 @@ class _VentilationScreenState extends State<VentilationScreen> {
           decoration: BoxDecoration(
             color: Colors.white.withOpacity(0.68),
             borderRadius: BorderRadius.circular(28),
-            border: Border.all(
-              color: Colors.white.withOpacity(0.74),
-            ),
+            border: Border.all(color: Colors.white.withOpacity(0.74)),
             boxShadow: [
               BoxShadow(
                 color: const Color(0xFF18321C).withOpacity(0.08),
@@ -416,9 +418,8 @@ class _VentilationScreenState extends State<VentilationScreen> {
                 onTap: () {
                   Navigator.of(context).pushReplacement(
                     MaterialPageRoute(
-                      builder: (_) => AnalyticsScreen(
-                        initialBatchName: widget.batchName,
-                      ),
+                      builder: (_) =>
+                          AnalyticsScreen(initialBatchName: widget.batchName),
                     ),
                   );
                 },
@@ -430,42 +431,13 @@ class _VentilationScreenState extends State<VentilationScreen> {
                 onTap: () {
                   Navigator.of(context).pushReplacement(
                     MaterialPageRoute(
-                      builder: (_) => ReportsScreen(
-                        initialBatchName: widget.batchName,
-                      ),
+                      builder: (_) =>
+                          ReportsScreen(initialBatchName: widget.batchName),
                     ),
                   );
                 },
               ),
             ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildEmptyState() {
-    return Container(
-      key: const ValueKey('empty'),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: const Color(0xFFE5ECE7)),
-      ),
-      child: Container(
-        height: 58,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: const Color(0xFFF8FBFA),
-          borderRadius: BorderRadius.circular(14),
-        ),
-        child: const Text(
-          'No devices added yet',
-          style: TextStyle(
-            color: Color(0xFF9AA8BD),
-            fontSize: 13,
-            fontWeight: FontWeight.w700,
           ),
         ),
       ),
@@ -482,11 +454,11 @@ class _VentilationScreenState extends State<VentilationScreen> {
         border: Border.all(color: const Color(0xFFE5ECE7)),
       ),
       child: const SizedBox(
-        height: 58,
+        height: 88,
         child: Center(
-          child: CircularProgressIndicator(
-            strokeWidth: 2,
-            color: Color(0xFF0BB13F),
+          child: ChickTempLoading(
+            text: 'Loading ventilation controls...',
+            size: 48,
           ),
         ),
       ),
@@ -547,16 +519,25 @@ class _VentilationScreenState extends State<VentilationScreen> {
                   ),
                   IconButton(
                     onPressed: () => _removeDeviceAt(index),
-                    icon: const Icon(Icons.delete_outline, size: 18, color: Color(0xFFB7C0CD)),
+                    icon: const Icon(
+                      Icons.delete_outline,
+                      size: 18,
+                      color: Color(0xFFB7C0CD),
+                    ),
                     visualDensity: VisualDensity.compact,
                     padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints.tightFor(width: 28, height: 28),
+                    constraints: const BoxConstraints.tightFor(
+                      width: 28,
+                      height: 28,
+                    ),
                   ),
                   const SizedBox(width: 4),
                   Text(
                     device.enabled ? 'ON' : 'OFF',
                     style: TextStyle(
-                      color: device.enabled ? const Color(0xFF24B26A) : const Color(0xFF8A96AC),
+                      color: device.enabled
+                          ? const Color(0xFF24B26A)
+                          : const Color(0xFF8A96AC),
                       fontSize: 11,
                       fontWeight: FontWeight.w800,
                     ),
@@ -598,11 +579,29 @@ class _VentilationScreenState extends State<VentilationScreen> {
               const SizedBox(height: 8),
               Row(
                 children: [
-                  Expanded(child: _SpeedButton(label: '1', selected: device.speed == 1, onTap: () => _setDeviceSpeed(index, 1))),
+                  Expanded(
+                    child: _SpeedButton(
+                      label: '1',
+                      selected: device.speed == 1,
+                      onTap: () => _setDeviceSpeed(index, 1),
+                    ),
+                  ),
                   const SizedBox(width: 8),
-                  Expanded(child: _SpeedButton(label: '2', selected: device.speed == 2, onTap: () => _setDeviceSpeed(index, 2))),
+                  Expanded(
+                    child: _SpeedButton(
+                      label: '2',
+                      selected: device.speed == 2,
+                      onTap: () => _setDeviceSpeed(index, 2),
+                    ),
+                  ),
                   const SizedBox(width: 8),
-                  Expanded(child: _SpeedButton(label: '3', selected: device.speed == 3, onTap: () => _setDeviceSpeed(index, 3))),
+                  Expanded(
+                    child: _SpeedButton(
+                      label: '3',
+                      selected: device.speed == 3,
+                      onTap: () => _setDeviceSpeed(index, 3),
+                    ),
+                  ),
                 ],
               ),
             ],
@@ -613,14 +612,87 @@ class _VentilationScreenState extends State<VentilationScreen> {
   }
 }
 
+class _FanRelayControlCard extends StatelessWidget {
+  final bool enabled;
+  final ValueChanged<bool> onChanged;
+
+  const _FanRelayControlCard({required this.enabled, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: const Color(0xFFE3E9E4)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: const [
+                Text(
+                  '5V Ventilation Fan Relay',
+                  style: TextStyle(
+                    color: Color(0xFF233047),
+                    fontSize: 15,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                SizedBox(height: 6),
+                Text(
+                  'Controls relay K3 / IN3.\nFan uses the separate 5V supply.',
+                  style: TextStyle(
+                    color: Color(0xFF93A0B6),
+                    fontSize: 10,
+                    fontWeight: FontWeight.w800,
+                    height: 1.2,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 10),
+          Text(
+            enabled ? 'ON' : 'OFF',
+            style: TextStyle(
+              color: enabled
+                  ? const Color(0xFF24B26A)
+                  : const Color(0xFF93A0B6),
+              fontSize: 11,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Switch(
+            value: enabled,
+            onChanged: onChanged,
+            activeColor: const Color(0xFF24B26A),
+            activeTrackColor: const Color(0xFFB9EBC9),
+            inactiveThumbColor: Colors.white,
+            inactiveTrackColor: const Color(0xFFD9E4D9),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _BackPill extends StatelessWidget {
   final String label;
   final VoidCallback onTap;
 
-  const _BackPill({
-    required this.label,
-    required this.onTap,
-  });
+  const _BackPill({required this.label, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -637,7 +709,11 @@ class _BackPill extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.arrow_back_ios_new_rounded, size: 14, color: Color(0xFF0C7D3A)),
+            const Icon(
+              Icons.arrow_back_ios_new_rounded,
+              size: 14,
+              color: Color(0xFF0C7D3A),
+            ),
             const SizedBox(width: 8),
             Text(
               label,
@@ -668,16 +744,16 @@ class _FanDevice {
     required this.id,
     required this.type,
     required this.description,
-  })  : enabled = false,
-        speed = 1;
+  }) : enabled = false,
+       speed = 1;
 
   factory _FanDevice.fromJson(Map<String, dynamic> json) {
     return _FanDevice(
-      name: json['name']?.toString() ?? 'Ventilation Fan 1',
-      id: json['id']?.toString() ?? 'FAN001',
-      type: json['type']?.toString() ?? 'Fan',
-      description: json['description']?.toString() ?? '',
-    )
+        name: json['name']?.toString() ?? 'Ventilation Fan 1',
+        id: json['id']?.toString() ?? 'FAN001',
+        type: json['type']?.toString() ?? 'Fan',
+        description: json['description']?.toString() ?? '',
+      )
       ..enabled = json['enabled'] == true
       ..speed = (json['speed'] as num?)?.toInt() ?? 1;
   }
@@ -691,235 +767,6 @@ class _FanDevice {
       'enabled': enabled,
       'speed': speed,
     };
-  }
-}
-
-class _FanDeviceDraft {
-  final String name;
-  final String id;
-  final String type;
-  final String description;
-
-  const _FanDeviceDraft({
-    required this.name,
-    required this.id,
-    required this.type,
-    required this.description,
-  });
-}
-
-class AddDeviceSheet extends StatefulWidget {
-  final String batchName;
-
-  const AddDeviceSheet({
-    super.key,
-    required this.batchName,
-  });
-
-  @override
-  State<AddDeviceSheet> createState() => _AddDeviceSheetState();
-}
-
-class _AddDeviceSheetState extends State<AddDeviceSheet> {
-  final TextEditingController _deviceNameController = TextEditingController();
-  final TextEditingController _deviceIdController = TextEditingController();
-  final TextEditingController _deviceTypeController = TextEditingController(text: 'Fan');
-  final TextEditingController _descriptionController = TextEditingController();
-
-  @override
-  void dispose() {
-    _deviceNameController.dispose();
-    _deviceIdController.dispose();
-    _deviceTypeController.dispose();
-    _descriptionController.dispose();
-    super.dispose();
-  }
-
-  void _save() {
-    final name = _deviceNameController.text.trim().isNotEmpty
-        ? _deviceNameController.text.trim()
-        : 'Ventilation Fan 1';
-    final id = _deviceIdController.text.trim().isNotEmpty ? _deviceIdController.text.trim() : 'FAN001';
-
-    Navigator.of(context).pop(
-      _FanDeviceDraft(
-        name: name,
-        id: id,
-        type: _deviceTypeController.text.trim().isNotEmpty ? _deviceTypeController.text.trim() : 'Fan',
-        description: _descriptionController.text.trim(),
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final bottomInset = MediaQuery.of(context).viewInsets.bottom;
-    final maxHeight = MediaQuery.of(context).size.height * 0.72;
-    return SafeArea(
-      top: false,
-      child: Padding(
-        padding: EdgeInsets.only(bottom: bottomInset),
-        child: Align(
-          alignment: Alignment.bottomCenter,
-          child: ConstrainedBox(
-            constraints: BoxConstraints(maxHeight: maxHeight),
-            child: Container(
-            padding: const EdgeInsets.fromLTRB(18, 14, 18, 16),
-            decoration: const BoxDecoration(
-              color: Color(0xFFF7FCF8),
-              borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-            ),
-            child: SingleChildScrollView(
-              keyboardDismissBehavior:
-                  ScrollViewKeyboardDismissBehavior.onDrag,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                Row(
-                  children: [
-                    const Expanded(
-                      child: Text(
-                        'Add New Device',
-                        style: TextStyle(
-                          color: Color(0xFF1F2937),
-                          fontSize: 22,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                    ),
-                    InkWell(
-                      onTap: () => Navigator.of(context).pop(),
-                      borderRadius: BorderRadius.circular(999),
-                      child: Container(
-                        width: 34,
-                        height: 34,
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(999),
-                          border: Border.all(color: const Color(0xFFDCE5DD)),
-                        ),
-                        child: const Icon(Icons.close_rounded, size: 18, color: Color(0xFF64748B)),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 14),
-                _SheetField(
-                  label: 'DEVICE NAME',
-                  hintText: 'e.g. Ventilation Fan 2',
-                  controller: _deviceNameController,
-                ),
-                const SizedBox(height: 10),
-                _SheetField(
-                  label: 'DEVICE ID',
-                  hintText: 'e.g. FAN002',
-                  controller: _deviceIdController,
-                ),
-                const SizedBox(height: 10),
-                _SheetField(
-                  label: 'DEVICE TYPE',
-                  hintText: 'Fan',
-                  controller: _deviceTypeController,
-                ),
-                const SizedBox(height: 10),
-                _SheetField(
-                  label: 'DESCRIPTION (OPTIONAL)',
-                  hintText: 'Enter device details...',
-                  controller: _descriptionController,
-                  maxLines: 3,
-                ),
-                const SizedBox(height: 12),
-                SizedBox(
-                  width: double.infinity,
-                  height: 52,
-                  child: FilledButton(
-                    onPressed: _save,
-                    style: FilledButton.styleFrom(
-                      backgroundColor: const Color(0xFF0BB13F),
-                      foregroundColor: Colors.white,
-                      elevation: 0,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                    ),
-                    child: const Text(
-                      'Save Device',
-                      style: TextStyle(fontWeight: FontWeight.w800),
-                    ),
-                  ),
-                ),
-                ],
-              ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _SheetField extends StatelessWidget {
-  final String label;
-  final String hintText;
-  final TextEditingController controller;
-  final int maxLines;
-
-  const _SheetField({
-    required this.label,
-    required this.hintText,
-    required this.controller,
-    this.maxLines = 1,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          label,
-          style: const TextStyle(
-            color: Color(0xFF6A7C99),
-            fontSize: 11,
-            fontWeight: FontWeight.w800,
-            letterSpacing: 0.4,
-          ),
-        ),
-        const SizedBox(height: 6),
-        TextField(
-          controller: controller,
-          maxLines: maxLines,
-          style: const TextStyle(
-            color: Color(0xFF111827),
-            fontWeight: FontWeight.w700,
-          ),
-          decoration: InputDecoration(
-            hintText: hintText,
-            hintStyle: const TextStyle(
-              color: Color(0xFF9AA7BC),
-              fontWeight: FontWeight.w600,
-            ),
-            filled: true,
-            fillColor: Colors.white,
-            contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(14),
-              borderSide: const BorderSide(color: Color(0xFFDCE4EE)),
-            ),
-            enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(14),
-              borderSide: const BorderSide(color: Color(0xFFDCE4EE)),
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(14),
-              borderSide: const BorderSide(color: Color(0xFF90D6A4)),
-            ),
-          ),
-        ),
-      ],
-    );
   }
 }
 
@@ -945,7 +792,9 @@ class _SpeedButton extends StatelessWidget {
         decoration: BoxDecoration(
           color: selected ? Colors.white : const Color(0xFFF8FBFA),
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: selected ? const Color(0xFF90D6A4) : const Color(0xFFE3E9E4)),
+          border: Border.all(
+            color: selected ? const Color(0xFF90D6A4) : const Color(0xFFE3E9E4),
+          ),
           boxShadow: selected
               ? [
                   BoxShadow(
@@ -1017,20 +866,14 @@ class _SoftShape extends StatelessWidget {
   final Color color;
   final double size;
 
-  const _SoftShape({
-    required this.color,
-    required this.size,
-  });
+  const _SoftShape({required this.color, required this.size});
 
   @override
   Widget build(BuildContext context) {
     return Container(
       width: size,
       height: size,
-      decoration: BoxDecoration(
-        color: color,
-        shape: BoxShape.circle,
-      ),
+      decoration: BoxDecoration(color: color, shape: BoxShape.circle),
     );
   }
 }

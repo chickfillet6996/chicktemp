@@ -10,7 +10,10 @@ import '../models/device_config_store.dart';
 import '../models/environmental_log_store.dart';
 import '../models/firebase_database_service.dart';
 import '../models/monitoring_store.dart';
+import '../models/shared_workspace.dart';
+import '../models/shared_workspace_migration.dart';
 import '../models/temperature_settings_store.dart';
+import '../widgets/chicktemp_loading.dart';
 import '../widgets/splash_background.dart';
 import '../widgets/user_avatar_content.dart';
 import 'profile_screen.dart';
@@ -26,25 +29,49 @@ class AnalyticsScreen extends StatefulWidget {
 }
 
 class _AnalyticsScreenState extends State<AnalyticsScreen> {
-  late final List<String> _batches;
   late String _selectedBatch;
   late Future<_AnalyticsData> _analyticsFuture;
   int _selectedNavIndex = 1;
   String? _selectedEnvironmentalLogDay;
   Timer? _analyticsRefreshTimer;
 
+  List<String> get _batches =>
+      BatchStore.instance.batches.map((batch) => batch.name).toSet().toList();
+
+  BatchItem? get _activeAnalyticsBatch => BatchStore.instance.activeBatch;
+
+  List<BatchItem> get _historyBatches => BatchStore.instance.historyBatches;
+
+  String get _analyticsBatchName {
+    final activeBatch = _activeAnalyticsBatch;
+    if (activeBatch != null) {
+      return activeBatch.name;
+    }
+
+    final allBatches = BatchStore.instance.batches;
+    if (allBatches.isNotEmpty) {
+      return allBatches.last.name;
+    }
+
+    return 'Default Batch';
+  }
+
   @override
   void initState() {
     super.initState();
-    _batches = BatchStore.instance.batches.map((batch) => batch.name).toList();
     final initialBatch = widget.initialBatchName;
-    _selectedBatch =
-        initialBatch != null && _batches.contains(initialBatch)
+    final activeBatchName = _analyticsBatchName;
+    _selectedBatch = initialBatch != null &&
+            initialBatch == activeBatchName &&
+            _batches.contains(initialBatch)
         ? initialBatch
-        : _batches.isEmpty
-        ? 'Default Batch'
-        : _batches.first;
-    TemperatureSettingsStore.instance.loadFor(_selectedBatch);
+        : activeBatchName;
+    unawaited(
+      TemperatureSettingsStore.instance.loadFor(
+        _selectedBatch,
+        forceRefresh: true,
+      ),
+    );
     _analyticsFuture = _loadAndRecordAnalytics();
     EnvironmentalLogStore.instance.addListener(
       _handleEnvironmentalLogRecorded,
@@ -68,13 +95,64 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
     _refreshLogs();
   }
 
-  void _refreshLogs() {
+  Future<void> _refreshAnalytics({bool refreshBatches = false}) async {
     if (!mounted) {
       return;
     }
+    if (refreshBatches) {
+      try {
+        await BatchStore.instance.loadForCurrentUser();
+      } on Object {
+        // Existing batch selection remains usable while offline.
+      }
+      if (!mounted) {
+        return;
+      }
+      final batches = _batches;
+      final nextBatch = _analyticsBatchName;
+      if (_selectedBatch != nextBatch || !batches.contains(_selectedBatch)) {
+        setState(() {
+          _selectedBatch = nextBatch;
+          _selectedEnvironmentalLogDay = null;
+        });
+        unawaited(
+          TemperatureSettingsStore.instance.loadFor(
+            _selectedBatch,
+            forceRefresh: true,
+          ),
+        );
+      }
+    }
+    final nextFuture = _loadAndRecordAnalytics();
     setState(() {
-      _analyticsFuture = _loadAndRecordAnalytics();
+      _analyticsFuture = nextFuture;
     });
+    try {
+      await nextFuture;
+    } on Object {
+      // The FutureBuilder already shows the latest available fallback state.
+    }
+  }
+
+  void _refreshLogs() {
+    unawaited(_refreshAnalytics());
+  }
+
+  void _syncSelectedBatchToActiveBatch() {
+    final nextBatch = _analyticsBatchName;
+    if (_selectedBatch == nextBatch) {
+      return;
+    }
+
+    _selectedBatch = nextBatch;
+    _selectedEnvironmentalLogDay = null;
+    unawaited(
+      TemperatureSettingsStore.instance.loadFor(
+        _selectedBatch,
+        forceRefresh: true,
+      ),
+    );
+    _analyticsFuture = _loadAndRecordAnalytics();
   }
 
   void _goHome() {
@@ -255,7 +333,6 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
     final enabledDeviceCount = deviceUsageItems
         .where((item) => item.enabled)
         .length;
-
     return _AnalyticsData(
       averageTemperature: displayedAverageTemperature,
       averageHumidity: displayedAverageHumidity,
@@ -289,11 +366,18 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
       return logs;
     }
 
+    return _logsForBatch(logs, batch);
+  }
+
+  List<EnvironmentalLog> _logsForBatch(
+    List<EnvironmentalLog> logs,
+    BatchItem batch,
+  ) {
     final batchKeys = <String>{
       batch.stableId,
       batch.name,
       _safeKey(batch.name),
-      if (_batches.isNotEmpty && _selectedBatch == _batches.first)
+      if (_batches.isNotEmpty && batch.name == _batches.first)
         'default_batch',
     };
 
@@ -307,6 +391,24 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
     }
 
     return filtered;
+  }
+
+  void _showBatchHistoryDetails(BatchItem batch) {
+    final detailFuture = _loadBatchHistoryDetails(batch);
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        return FractionallySizedBox(
+          heightFactor: 0.88,
+          child: _BatchHistoryDetailSheet(
+            batch: batch,
+            detailsFuture: detailFuture,
+          ),
+        );
+      },
+    );
   }
 
   List<EnvironmentalLog> _averageLogsByFifteenMinutes(
@@ -374,7 +476,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
 
     final batchKey = _safeKey(_selectedBatch);
     final latestPath =
-        'user_data/${user.id}/latest_analytics_by_batch/$batchKey.json';
+        SharedWorkspace.path('latest_analytics_by_batch/$batchKey.json');
     final database = FirebaseDatabaseService.instance;
     final previous = await database.get(latestPath);
     if (previous is Map<String, dynamic>) {
@@ -410,7 +512,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
 
     await database.put(latestPath, payload);
     await database.post(
-      'user_data/${user.id}/analytics_snapshots.json',
+      SharedWorkspace.path('analytics_snapshots.json'),
       payload,
     );
   }
@@ -432,10 +534,12 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
               Expanded(
                 child: AnimatedBuilder(
                   animation: Listenable.merge([
+                    BatchStore.instance,
                     MonitoringStore.instance,
                     TemperatureSettingsStore.instance,
                   ]),
                   builder: (context, _) {
+                    _syncSelectedBatchToActiveBatch();
                     return FutureBuilder<_AnalyticsData>(
                       future: _analyticsFuture,
                       builder: (context, snapshot) {
@@ -502,8 +606,11 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                         ];
 
                         return RefreshIndicator(
-                          onRefresh: () async => _refreshLogs(),
+                          onRefresh: () => _refreshAnalytics(
+                            refreshBatches: true,
+                          ),
                           child: ListView(
+                            physics: const AlwaysScrollableScrollPhysics(),
                             padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
                             children: [
                               Row(
@@ -530,7 +637,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                                     icon: const Icon(Icons.refresh_rounded),
                                     color: const Color(0xFF2E7D32),
                                   ),
-                                  if (_batches.isNotEmpty) _batchDropdown(),
+                                  _activeBatchChip(selectedBatchItem),
                                 ],
                               ),
                               const SizedBox(height: 10),
@@ -552,6 +659,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                                 const _StatusBanner(
                                   text: 'Loading Firebase analytics...',
                                   icon: Icons.cloud_sync_outlined,
+                                  isLoading: true,
                                 )
                               else if (logs.isEmpty)
                                 const _StatusBanner(
@@ -672,14 +780,6 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                                 child: _MortalityAnalysisPanel(data: data),
                               ),
                               const SizedBox(height: 18),
-                              const _SectionLabel('DEVICE USAGE ANALYTICS'),
-                              const SizedBox(height: 10),
-                              Container(
-                                padding: const EdgeInsets.all(16),
-                                decoration: _panelDecoration(),
-                                child: _DeviceUsageAnalyticsPanel(data: data),
-                              ),
-                              const SizedBox(height: 18),
                               const _SectionLabel('ENVIRONMENTAL LOGS'),
                               const SizedBox(height: 10),
                               Container(
@@ -693,6 +793,17 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                                       _selectedEnvironmentalLogDay = value;
                                     });
                                   },
+                                ),
+                              ),
+                              const SizedBox(height: 18),
+                              const _SectionLabel('BATCH HISTORY'),
+                              const SizedBox(height: 10),
+                              Container(
+                                padding: const EdgeInsets.all(16),
+                                decoration: _panelDecoration(),
+                                child: _BatchHistoryPanel(
+                                  batches: _historyBatches,
+                                  onBatchTap: _showBatchHistoryDetails,
                                 ),
                               ),
                               const SizedBox(height: 120),
@@ -761,43 +872,32 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
     );
   }
 
-  Widget _batchDropdown() {
+  Widget _activeBatchChip(BatchItem? batch) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: const Color(0xFFE3E9E4)),
       ),
-      child: DropdownButtonHideUnderline(
-        child: DropdownButton<String>(
-          value: _selectedBatch,
-          borderRadius: BorderRadius.circular(16),
-          icon: const Icon(Icons.keyboard_arrow_down_rounded),
-          items: _batches
-              .map(
-                (batch) => DropdownMenuItem<String>(
-                  value: batch,
-                  child: Text(
-                    batch,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w700,
-                      color: Color(0xFF26412C),
-                    ),
-                  ),
-                ),
-              )
-              .toList(),
-          onChanged: (value) {
-            if (value != null) {
-              TemperatureSettingsStore.instance.loadFor(value);
-              setState(() {
-                _selectedBatch = value;
-                _analyticsFuture = _loadAndRecordAnalytics();
-              });
-            }
-          },
-        ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(
+            Icons.check_circle_rounded,
+            size: 16,
+            color: Color(0xFF2E7D32),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            batch == null ? 'No Active Batch' : 'Active Batch',
+            style: const TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w800,
+              color: Color(0xFF26412C),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -982,32 +1082,22 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
       return const _MortalityInsights.empty();
     }
 
-    final path =
-        'user_data/${user.id}/mortality_records/${batch.stableId}.json';
     try {
-      final response = await FirebaseDatabaseService.instance.get(path);
-      if (response is! Map<String, dynamic>) {
-        return const _MortalityInsights.empty();
-      }
-
+      final records = await _loadMortalityRecordsForBatch(batch);
       final totals = <String, int>{};
       final intervals = List<int>.filled(7, 0);
-      for (final value in response.values) {
-        if (value is! Map<String, dynamic>) {
-          continue;
-        }
-        final deaths = _readInt(value['deaths']);
+      for (final record in records) {
+        final deaths = record.deaths;
         if (deaths <= 0) {
           continue;
         }
-        final rawReason = value['note']?.toString().trim() ?? '';
-        final reason = rawReason.isEmpty ? 'Unspecified' : rawReason;
+        final reason = record.reason;
         totals.update(
           reason,
           (current) => current + deaths,
           ifAbsent: () => deaths,
         );
-        final recordedAt = _readDate(value['recorded_at'] ?? value['date']);
+        final recordedAt = record.date;
         final intervalIndex = ((recordedAt.hour - 6) / 2).floor();
         if (intervalIndex >= 0 && intervalIndex < intervals.length) {
           intervals[intervalIndex] += deaths;
@@ -1020,6 +1110,81 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
     } on Object {
       return const _MortalityInsights.empty();
     }
+  }
+
+  Future<_BatchHistoryDetails> _loadBatchHistoryDetails(BatchItem batch) async {
+    final results = await Future.wait<dynamic>([
+      EnvironmentalLogStore.instance.fetchLogsForBatch(batch: batch),
+      _loadMortalityRecordsForBatch(batch),
+    ]);
+    final logs = results[0] as List<EnvironmentalLog>;
+    final mortalityRecords = results[1] as List<_MortalityHistoryRecord>;
+    return _BatchHistoryDetails(
+      logs: logs,
+      mortalityRecords: mortalityRecords,
+    );
+  }
+
+  Future<List<_MortalityHistoryRecord>> _loadMortalityRecordsForBatch(
+    BatchItem batch,
+  ) async {
+    final user = AuthStore.instance.currentUser;
+    if (user == null) {
+      return const [];
+    }
+
+    final recordPath = 'mortality_records/${batch.stableId}.json';
+    final path = SharedWorkspace.path(recordPath);
+    var response = await FirebaseDatabaseService.instance.get(path);
+    if (response is! Map<String, dynamic> || response.isEmpty) {
+      final legacyResponse = await _loadLegacyMortalityRecords(
+        user.id,
+        recordPath,
+      );
+      if (legacyResponse is Map<String, dynamic> && legacyResponse.isNotEmpty) {
+        response = legacyResponse;
+        await FirebaseDatabaseService.instance.put(
+          path,
+          Map<String, dynamic>.from(legacyResponse),
+        );
+      }
+    }
+    if (response is! Map<String, dynamic>) {
+      return const [];
+    }
+
+    final records = <_MortalityHistoryRecord>[];
+    for (final entry in response.entries) {
+      final value = entry.value;
+      if (value is! Map<String, dynamic>) {
+        continue;
+      }
+      final deaths = _readInt(value['deaths']);
+      if (deaths <= 0) {
+        continue;
+      }
+      final rawReason = value['note']?.toString().trim() ?? '';
+      records.add(
+        _MortalityHistoryRecord(
+          deaths: deaths,
+          reason: rawReason.isEmpty ? 'Unspecified' : rawReason,
+          date: _readDate(value['date'] ?? value['recorded_at']),
+        ),
+      );
+    }
+
+    records.sort((a, b) => b.date.compareTo(a.date));
+    return records;
+  }
+
+  Future<Map<String, dynamic>?> _loadLegacyMortalityRecords(
+    String currentUserId,
+    String recordPath,
+  ) async {
+    return SharedWorkspaceMigration.instance.loadLegacyMap(
+      recordPath,
+      fallbackUserId: currentUserId,
+    );
   }
 
   int _readInt(dynamic value) {
@@ -1123,6 +1288,63 @@ class _MortalityInsights {
   const _MortalityInsights.empty()
     : reasonCounts = const {},
       intervalCounts = const [0, 0, 0, 0, 0, 0, 0];
+}
+
+class _BatchHistoryDetails {
+  final List<EnvironmentalLog> logs;
+  final List<_MortalityHistoryRecord> mortalityRecords;
+
+  const _BatchHistoryDetails({
+    required this.logs,
+    required this.mortalityRecords,
+  });
+
+  Map<String, int> get deathCauseCounts {
+    final counts = <String, int>{};
+    for (final record in mortalityRecords) {
+      counts.update(
+        record.reason,
+        (value) => value + record.deaths,
+        ifAbsent: () => record.deaths,
+      );
+    }
+    return counts;
+  }
+
+  int get totalDeaths => mortalityRecords.fold<int>(
+        0,
+        (sum, record) => sum + record.deaths,
+      );
+
+  double get averageTemperature {
+    final readings = logs.where((log) => log.temperature > 0).toList();
+    if (readings.isEmpty) {
+      return 0;
+    }
+    return readings.fold<double>(0, (sum, log) => sum + log.temperature) /
+        readings.length;
+  }
+
+  double get averageHumidity {
+    final readings = logs.where((log) => log.humidity > 0).toList();
+    if (readings.isEmpty) {
+      return 0;
+    }
+    return readings.fold<double>(0, (sum, log) => sum + log.humidity) /
+        readings.length;
+  }
+}
+
+class _MortalityHistoryRecord {
+  final int deaths;
+  final String reason;
+  final DateTime date;
+
+  const _MortalityHistoryRecord({
+    required this.deaths,
+    required this.reason,
+    required this.date,
+  });
 }
 
 class _DeviceUsageItem {
@@ -1331,6 +1553,759 @@ class _BatchCycleChip extends StatelessWidget {
   }
 }
 
+class _BatchHistoryPanel extends StatelessWidget {
+  final List<BatchItem> batches;
+  final ValueChanged<BatchItem> onBatchTap;
+
+  const _BatchHistoryPanel({
+    required this.batches,
+    required this.onBatchTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (batches.isEmpty) {
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.fromLTRB(14, 18, 14, 18),
+        decoration: BoxDecoration(
+          color: const Color(0xFFF7FBF8),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: const Color(0xFFDCEADD)),
+        ),
+        child: const Text(
+          'No finished batches yet. Finished batches will appear here for history.',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            color: Color(0xFF64748B),
+            fontSize: 12,
+            fontWeight: FontWeight.w700,
+            height: 1.35,
+          ),
+        ),
+      );
+    }
+
+    return Column(
+      children: [
+        for (var index = 0; index < batches.length; index++) ...[
+          _BatchHistoryTile(
+            batch: batches[index],
+            onTap: () => onBatchTap(batches[index]),
+          ),
+          if (index != batches.length - 1) const SizedBox(height: 10),
+        ],
+      ],
+    );
+  }
+}
+
+class _BatchHistoryTile extends StatelessWidget {
+  final BatchItem batch;
+  final VoidCallback onTap;
+
+  const _BatchHistoryTile({
+    required this.batch,
+    required this.onTap,
+  });
+
+  int get _totalBirds => _readBirds(batch.birdsLabel);
+
+  int get _deaths => BatchStore.instance.mortalityCountFor(batch.name);
+
+  int get _alive => (_totalBirds - _deaths).clamp(0, _totalBirds).toInt();
+
+  double get _survivalRate =>
+      _totalBirds <= 0 ? 0 : (_alive / _totalBirds) * 100;
+
+  static int _readBirds(String label) {
+    final digits = RegExp(r'\d+').firstMatch(label)?.group(0);
+    return int.tryParse(digits ?? '') ?? 0;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(16),
+        splashColor: const Color(0xFF2E7D32).withOpacity(0.12),
+        highlightColor: const Color(0xFF2E7D32).withOpacity(0.08),
+        child: Ink(
+          width: double.infinity,
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.72),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: const Color(0xFFE1EAE2)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: 38,
+                    height: 38,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFEFF7EF),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(
+                      Icons.history_rounded,
+                      color: Color(0xFF2E7D32),
+                      size: 20,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          batch.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Color(0xFF172033),
+                            fontSize: 14,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                        const SizedBox(height: 3),
+                        Text(
+                          batch.startedAt,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Color(0xFF64748B),
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 9,
+                      vertical: 5,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF1F5F3),
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(color: const Color(0xFFD5DEDA)),
+                    ),
+                    child: const Text(
+                      'HISTORY',
+                      style: TextStyle(
+                        color: Color(0xFF5F6F67),
+                        fontSize: 10,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: 0.4,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  const Icon(
+                    Icons.chevron_right_rounded,
+                    color: Color(0xFF94A3B8),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  _HistoryMetric(label: 'Progress', value: batch.dayLabel),
+                  _HistoryMetric(label: 'Birds', value: '$_totalBirds'),
+                  _HistoryMetric(label: 'Deaths', value: '$_deaths'),
+                  _HistoryMetric(
+                    label: 'Survival',
+                    value: '${_survivalRate.toStringAsFixed(1)}%',
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _HistoryMetric extends StatelessWidget {
+  final String label;
+  final String value;
+
+  const _HistoryMetric({
+    required this.label,
+    required this.value,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8FBF7),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE4ECE5)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            label,
+            style: const TextStyle(
+              color: Color(0xFF64748B),
+              fontSize: 9,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 0.3,
+            ),
+          ),
+          const SizedBox(height: 3),
+          Text(
+            value,
+            style: const TextStyle(
+              color: Color(0xFF172033),
+              fontSize: 12,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _BatchHistoryDetailSheet extends StatelessWidget {
+  final BatchItem batch;
+  final Future<_BatchHistoryDetails> detailsFuture;
+
+  const _BatchHistoryDetailSheet({
+    required this.batch,
+    required this.detailsFuture,
+  });
+
+  int get _totalBirds {
+    final digits = RegExp(r'\d+').firstMatch(batch.birdsLabel)?.group(0);
+    return int.tryParse(digits ?? '') ?? 0;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: const BoxDecoration(
+        color: Color(0xFFF4F7F3),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+      ),
+      child: SafeArea(
+        top: false,
+        child: FutureBuilder<_BatchHistoryDetails>(
+          future: detailsFuture,
+          builder: (context, snapshot) {
+            final isLoading = snapshot.connectionState == ConnectionState.waiting;
+            final details = snapshot.data;
+
+            return Column(
+              children: [
+                const SizedBox(height: 10),
+                Container(
+                  width: 42,
+                  height: 5,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFB7C3B9),
+                    borderRadius: BorderRadius.circular(99),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(18, 16, 10, 8),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              batch.name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: Color(0xFF172033),
+                                fontSize: 22,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                            const SizedBox(height: 5),
+                            Text(
+                              '${batch.startedAt} | ${batch.dayLabel}',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: Color(0xFF64748B),
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      IconButton(
+                        onPressed: () => Navigator.of(context).pop(),
+                        icon: const Icon(Icons.close_rounded),
+                        color: const Color(0xFF516154),
+                      ),
+                    ],
+                  ),
+                ),
+                Expanded(
+                  child: ListView(
+                    padding: const EdgeInsets.fromLTRB(18, 4, 18, 24),
+                    children: [
+                      if (isLoading)
+                        const _HistoryDetailLoading()
+                      else if (snapshot.hasError)
+                        const _HistoryDetailEmpty(
+                          icon: Icons.cloud_off_outlined,
+                          text:
+                              'Could not load this batch history right now. Try refreshing when Firebase is available.',
+                        )
+                      else if (details != null) ...[
+                        _HistoryDetailSummary(
+                          totalBirds: _totalBirds,
+                          logCount: details.logs.length,
+                          totalDeaths: details.totalDeaths,
+                          averageTemperature: details.averageTemperature,
+                          averageHumidity: details.averageHumidity,
+                        ),
+                        const SizedBox(height: 16),
+                        const _SectionLabel('ENVIRONMENTAL LOGS'),
+                        const SizedBox(height: 10),
+                        _HistoryEnvironmentLogs(logs: details.logs),
+                        const SizedBox(height: 16),
+                        const _SectionLabel('CAUSES OF DEATHS'),
+                        const SizedBox(height: 10),
+                        _DeathCauseList(causeCounts: details.deathCauseCounts),
+                        const SizedBox(height: 16),
+                        const _SectionLabel('MORTALITY RECORDS'),
+                        const SizedBox(height: 10),
+                        _MortalityRecordHistory(
+                          records: details.mortalityRecords,
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+class _HistoryDetailLoading extends StatelessWidget {
+  const _HistoryDetailLoading();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(vertical: 36),
+      decoration: _historyDetailCardDecoration(),
+      child: const Column(
+        children: [
+          ChickTempLoading.compact(size: 28, color: Color(0xFF2E7D32)),
+          SizedBox(height: 12),
+          Text(
+            'Loading batch history...',
+            style: TextStyle(
+              color: Color(0xFF64748B),
+              fontSize: 12,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _HistoryDetailSummary extends StatelessWidget {
+  final int totalBirds;
+  final int logCount;
+  final int totalDeaths;
+  final double averageTemperature;
+  final double averageHumidity;
+
+  const _HistoryDetailSummary({
+    required this.totalBirds,
+    required this.logCount,
+    required this.totalDeaths,
+    required this.averageTemperature,
+    required this.averageHumidity,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: _historyDetailCardDecoration(),
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: [
+          _HistoryMetric(label: 'Birds', value: '$totalBirds'),
+          _HistoryMetric(label: 'Logs', value: '$logCount'),
+          _HistoryMetric(label: 'Deaths', value: '$totalDeaths'),
+          _HistoryMetric(
+            label: 'Avg Temp',
+            value: averageTemperature > 0
+                ? '${averageTemperature.toStringAsFixed(1)}\u00B0C'
+                : '--',
+          ),
+          _HistoryMetric(
+            label: 'Avg Humidity',
+            value: averageHumidity > 0
+                ? '${averageHumidity.toStringAsFixed(0)}%'
+                : '--',
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _HistoryEnvironmentLogs extends StatelessWidget {
+  final List<EnvironmentalLog> logs;
+
+  const _HistoryEnvironmentLogs({required this.logs});
+
+  @override
+  Widget build(BuildContext context) {
+    if (logs.isEmpty) {
+      return const _HistoryDetailEmpty(
+        icon: Icons.history_rounded,
+        text: 'No environmental logs were saved for this batch.',
+      );
+    }
+
+    final recentLogs = logs.reversed.take(10).toList();
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: _historyDetailCardDecoration(),
+      child: Column(
+        children: [
+          for (var index = 0; index < recentLogs.length; index++) ...[
+            _HistoryLogRow(log: recentLogs[index]),
+            if (index != recentLogs.length - 1)
+              const Divider(height: 18, color: Color(0xFFE4ECE5)),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _HistoryLogRow extends StatelessWidget {
+  final EnvironmentalLog log;
+
+  const _HistoryLogRow({required this.log});
+
+  @override
+  Widget build(BuildContext context) {
+    final time = DateFormat('MMM d, yyyy h:mm a').format(log.recordedAt);
+    final waterText = log.waterDistanceCm > 0
+        ? 'Water ${log.waterLevelPercent.toStringAsFixed(0)}%'
+        : 'Water --';
+    final feederText = log.feederDistanceCm > 0
+        ? 'Feeder ${log.feederLevelPercent.toStringAsFixed(0)}%'
+        : 'Feeder --';
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          width: 34,
+          height: 34,
+          decoration: BoxDecoration(
+            color: const Color(0xFFEFF7EF),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: const Icon(
+            Icons.thermostat_outlined,
+            color: Color(0xFF2E7D32),
+            size: 18,
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                time,
+                style: const TextStyle(
+                  color: Color(0xFF172033),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                '${log.temperature.toStringAsFixed(1)}\u00B0C | ${log.humidity.toStringAsFixed(0)}% | $waterText | $feederText',
+                style: const TextStyle(
+                  color: Color(0xFF64748B),
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  height: 1.3,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _DeathCauseList extends StatelessWidget {
+  final Map<String, int> causeCounts;
+
+  const _DeathCauseList({required this.causeCounts});
+
+  @override
+  Widget build(BuildContext context) {
+    if (causeCounts.isEmpty) {
+      return const _HistoryDetailEmpty(
+        icon: Icons.monitor_heart_outlined,
+        text: 'No death causes have been recorded for this batch.',
+      );
+    }
+
+    final entries = causeCounts.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    final totalDeaths = entries.fold<int>(0, (sum, entry) => sum + entry.value);
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: _historyDetailCardDecoration(),
+      child: Column(
+        children: [
+          for (var index = 0; index < entries.length; index++) ...[
+            _DeathCauseRow(
+              reason: entries[index].key,
+              deaths: entries[index].value,
+              totalDeaths: totalDeaths,
+            ),
+            if (index != entries.length - 1)
+              const SizedBox(height: 10),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _DeathCauseRow extends StatelessWidget {
+  final String reason;
+  final int deaths;
+  final int totalDeaths;
+
+  const _DeathCauseRow({
+    required this.reason,
+    required this.deaths,
+    required this.totalDeaths,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final percent = totalDeaths <= 0 ? 0.0 : deaths / totalDeaths;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                reason,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Color(0xFF172033),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            ),
+            Text(
+              '$deaths',
+              style: const TextStyle(
+                color: Color(0xFFB45309),
+                fontSize: 12,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(99),
+          child: LinearProgressIndicator(
+            minHeight: 8,
+            value: percent.clamp(0, 1).toDouble(),
+            backgroundColor: const Color(0xFFF0E8DC),
+            valueColor: const AlwaysStoppedAnimation<Color>(
+              Color(0xFFB45309),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _MortalityRecordHistory extends StatelessWidget {
+  final List<_MortalityHistoryRecord> records;
+
+  const _MortalityRecordHistory({required this.records});
+
+  @override
+  Widget build(BuildContext context) {
+    if (records.isEmpty) {
+      return const _HistoryDetailEmpty(
+        icon: Icons.description_outlined,
+        text: 'No mortality records were saved for this batch.',
+      );
+    }
+
+    final recentRecords = records.take(8).toList();
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: _historyDetailCardDecoration(),
+      child: Column(
+        children: [
+          for (var index = 0; index < recentRecords.length; index++) ...[
+            _MortalityRecordRow(record: recentRecords[index]),
+            if (index != recentRecords.length - 1)
+              const Divider(height: 18, color: Color(0xFFE4ECE5)),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _MortalityRecordRow extends StatelessWidget {
+  final _MortalityHistoryRecord record;
+
+  const _MortalityRecordRow({required this.record});
+
+  @override
+  Widget build(BuildContext context) {
+    final date = DateFormat('MMM d, yyyy').format(record.date);
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          width: 34,
+          height: 34,
+          decoration: BoxDecoration(
+            color: const Color(0xFFFFF4E5),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: const Icon(
+            Icons.monitor_heart_outlined,
+            color: Color(0xFFB45309),
+            size: 18,
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '$date | ${record.deaths} death(s)',
+                style: const TextStyle(
+                  color: Color(0xFF172033),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                record.reason,
+                style: const TextStyle(
+                  color: Color(0xFF64748B),
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  height: 1.3,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _HistoryDetailEmpty extends StatelessWidget {
+  final IconData icon;
+  final String text;
+
+  const _HistoryDetailEmpty({
+    required this.icon,
+    required this.text,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(16, 22, 16, 20),
+      decoration: _historyDetailCardDecoration(),
+      child: Column(
+        children: [
+          Icon(icon, color: const Color(0xFF94A3B8), size: 24),
+          const SizedBox(height: 10),
+          Text(
+            text,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: Color(0xFF64748B),
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+              height: 1.35,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+BoxDecoration _historyDetailCardDecoration() {
+  return BoxDecoration(
+    color: Colors.white.withOpacity(0.82),
+    borderRadius: BorderRadius.circular(18),
+    border: Border.all(color: const Color(0xFFE3E9E4)),
+    boxShadow: [
+      BoxShadow(
+        color: const Color(0xFF18321C).withOpacity(0.04),
+        blurRadius: 12,
+        offset: const Offset(0, 6),
+      ),
+    ],
+  );
+}
+
 class _SensorNotice {
   final String text;
   final IconData icon;
@@ -1516,8 +2491,13 @@ class _SensorNoticeTile extends StatelessWidget {
 class _StatusBanner extends StatelessWidget {
   final String text;
   final IconData icon;
+  final bool isLoading;
 
-  const _StatusBanner({required this.text, required this.icon});
+  const _StatusBanner({
+    required this.text,
+    required this.icon,
+    this.isLoading = false,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1530,7 +2510,13 @@ class _StatusBanner extends StatelessWidget {
       ),
       child: Row(
         children: [
-          Icon(icon, color: const Color(0xFF2E7D32), size: 20),
+          if (isLoading)
+            const ChickTempLoading.compact(
+              size: 24,
+              color: Color(0xFF2E7D32),
+            )
+          else
+            Icon(icon, color: const Color(0xFF2E7D32), size: 20),
           const SizedBox(width: 10),
           Expanded(
             child: Text(

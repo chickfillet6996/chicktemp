@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../models/auth_store.dart';
 import '../widgets/auth_animated_logo_header.dart';
+import '../widgets/chicktemp_loading.dart';
 
 const Color _authFieldColor = Color(0xFF757575);
 
@@ -458,14 +459,8 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen>
                                           ),
                                         ),
                                         child: _isSubmitting
-                                            ? const SizedBox(
-                                                width: 18,
-                                                height: 18,
-                                                child:
-                                                    CircularProgressIndicator(
-                                                      strokeWidth: 2,
-                                                      color: Colors.white,
-                                                    ),
+                                            ? const ChickTempLoading.compact(
+                                                size: 22,
                                               )
                                             : const Row(
                                                 mainAxisAlignment:

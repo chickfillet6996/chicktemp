@@ -63,11 +63,6 @@ class AboutAppScreen extends StatelessWidget {
                               'Dustin Juri',
                             ],
                           ),
-                          SizedBox(height: compact ? 12 : 18),
-                          const _InfoGroup(
-                            title: 'SUPPORT EMAIL',
-                            lines: ['chicktfillet6996@gmail.com'],
-                          ),
                         ],
                       ),
                     ),
@@ -374,14 +369,10 @@ class _InfoGroup extends StatelessWidget {
             child: Text(
               line,
               textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: title == 'SUPPORT EMAIL' ? 13.5 : 14.5,
-                fontWeight: title == 'SUPPORT EMAIL'
-                    ? FontWeight.w700
-                    : FontWeight.w600,
-                color: title == 'SUPPORT EMAIL'
-                    ? const Color(0xFF61716A)
-                    : const Color(0xFF2D3C34),
+              style: const TextStyle(
+                fontSize: 14.5,
+                fontWeight: FontWeight.w600,
+                color: Color(0xFF2D3C34),
                 height: 1.42,
               ),
             ),

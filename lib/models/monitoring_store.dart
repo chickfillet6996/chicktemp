@@ -7,9 +7,10 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'auth_store.dart';
 import 'batch_store.dart';
+import 'environmental_log_store.dart';
 import 'sensor_config.dart';
+import 'shared_workspace.dart';
 
 class TelemetryPoint {
   final double temperature;
@@ -38,11 +39,18 @@ class BatchTelemetry {
   final double waterDistanceCm;
   final double feederLevelPercent;
   final double feederDistanceCm;
+  final bool waterPumpEnabled;
+  final bool lightBulbEnabled;
+  final bool lightBulbOverrideActive;
+  final bool ventilationFanEnabled;
+  final bool ventilationFanOverrideActive;
+  final bool feederServoEnabled;
   final int deaths;
   final List<double> temperatureHistory;
   final List<double> humidityHistory;
   final List<TelemetryPoint> recentReadings;
   final DateTime updatedAt;
+  final bool isDeviceLive;
   final bool isLive;
   final bool isWaterLevelLive;
   final bool isFeederLevelLive;
@@ -54,11 +62,18 @@ class BatchTelemetry {
     required this.waterDistanceCm,
     required this.feederLevelPercent,
     required this.feederDistanceCm,
+    this.waterPumpEnabled = false,
+    this.lightBulbEnabled = false,
+    this.lightBulbOverrideActive = false,
+    this.ventilationFanEnabled = false,
+    this.ventilationFanOverrideActive = false,
+    this.feederServoEnabled = false,
     required this.deaths,
     required this.temperatureHistory,
     required this.humidityHistory,
     required this.recentReadings,
     required this.updatedAt,
+    this.isDeviceLive = false,
     this.isLive = false,
     this.isWaterLevelLive = false,
     this.isFeederLevelLive = false,
@@ -138,7 +153,7 @@ class MonitoringStore extends ChangeNotifier with WidgetsBindingObserver {
     final savedName = _sensorBatchName;
     if (savedName != null) {
       for (final batch in batches) {
-        if (batch.name == savedName) {
+        if (batch.name == savedName && _isActiveBatch(batch)) {
           return batch;
         }
       }
@@ -151,6 +166,12 @@ class MonitoringStore extends ChangeNotifier with WidgetsBindingObserver {
 
   BatchItem _preferredSensorBatch(List<BatchItem> batches) {
     for (final batch in batches) {
+      if (_isActiveBatch(batch)) {
+        return batch;
+      }
+    }
+
+    for (final batch in batches) {
       final key = '${batch.name} ${batch.stableId}'.toLowerCase();
       if (key.contains('batch 1') ||
           key.contains('batch_1') ||
@@ -160,6 +181,10 @@ class MonitoringStore extends ChangeNotifier with WidgetsBindingObserver {
     }
 
     return batches.last;
+  }
+
+  bool _isActiveBatch(BatchItem batch) {
+    return batch.status.toUpperCase() == 'ACTIVE';
   }
 
   BatchTelemetry snapshotFor(String batchName) {
@@ -221,6 +246,12 @@ class MonitoringStore extends ChangeNotifier with WidgetsBindingObserver {
       waterDistanceCm: 0,
       feederLevelPercent: 0,
       feederDistanceCm: 0,
+      waterPumpEnabled: false,
+      lightBulbEnabled: false,
+      lightBulbOverrideActive: false,
+      ventilationFanEnabled: false,
+      ventilationFanOverrideActive: false,
+      feederServoEnabled: false,
       deaths: 0,
       temperatureHistory: List<double>.filled(8, 0),
       humidityHistory: List<double>.filled(8, 0),
@@ -274,6 +305,18 @@ class MonitoringStore extends ChangeNotifier with WidgetsBindingObserver {
         'feeder_level',
       ]);
       final feederDistance = _readDouble(json, ['feeder_distance_cm']);
+      final waterPumpEnabled = _readBool(json, ['water_pump_enabled']);
+      final lightBulbEnabled = _readBool(json, ['light_bulb_enabled']);
+      final lightBulbOverrideActive = _readBool(json, [
+        'light_bulb_override_active',
+      ]);
+      final ventilationFanEnabled = _readBool(json, [
+        'ventilation_fan_enabled',
+      ]);
+      final ventilationFanOverrideActive = _readBool(json, [
+        'ventilation_fan_override_active',
+      ]);
+      final feederServoEnabled = _readBool(json, ['feeder_servo_enabled']);
       final rawSourceUpdatedAt = json['updated_at'] ?? json['updatedAt'];
       final sourceUpdatedAt = _readDateTime(rawSourceUpdatedAt);
       final isFirebaseSource = _sensorUrl == SensorConfig.firebaseSensorUrl;
@@ -299,6 +342,13 @@ class MonitoringStore extends ChangeNotifier with WidgetsBindingObserver {
         feederDistanceCm: double.parse(
           (feederDistance ?? 0).toStringAsFixed(1),
         ),
+        waterPumpEnabled: waterPumpEnabled ?? false,
+        lightBulbEnabled: lightBulbEnabled ?? false,
+        lightBulbOverrideActive: lightBulbOverrideActive ?? false,
+        ventilationFanEnabled: ventilationFanEnabled ?? false,
+        ventilationFanOverrideActive: ventilationFanOverrideActive ?? false,
+        feederServoEnabled: feederServoEnabled ?? false,
+        isDeviceLive: isFresh,
         isLive: status == 'ok' && isFresh,
         isWaterLevelLive:
             hasWaterReading &&
@@ -337,6 +387,25 @@ class MonitoringStore extends ChangeNotifier with WidgetsBindingObserver {
         final parsed = double.tryParse(value);
         if (parsed != null) {
           return parsed;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  bool? _readBool(Map<String, dynamic> json, List<String> keys) {
+    for (final key in keys) {
+      final value = json[key];
+      if (value is bool) {
+        return value;
+      }
+      if (value is String) {
+        if (value.toLowerCase() == 'true') {
+          return true;
+        }
+        if (value.toLowerCase() == 'false') {
+          return false;
         }
       }
     }
@@ -394,6 +463,7 @@ class MonitoringStore extends ChangeNotifier with WidgetsBindingObserver {
     for (final batch in BatchStore.instance.batches) {
       final previous = _telemetryByBatch[batch.name] ?? _seedTelemetry();
       if (previous.isLive ||
+          previous.isDeviceLive ||
           previous.isWaterLevelLive ||
           previous.isFeederLevelLive) {
         _telemetryByBatch[batch.name] = BatchTelemetry(
@@ -403,11 +473,18 @@ class MonitoringStore extends ChangeNotifier with WidgetsBindingObserver {
           waterDistanceCm: previous.waterDistanceCm,
           feederLevelPercent: previous.feederLevelPercent,
           feederDistanceCm: previous.feederDistanceCm,
+          waterPumpEnabled: previous.waterPumpEnabled,
+          lightBulbEnabled: previous.lightBulbEnabled,
+          lightBulbOverrideActive: previous.lightBulbOverrideActive,
+          ventilationFanEnabled: previous.ventilationFanEnabled,
+          ventilationFanOverrideActive: previous.ventilationFanOverrideActive,
+          feederServoEnabled: previous.feederServoEnabled,
           deaths: previous.deaths,
           temperatureHistory: previous.temperatureHistory,
           humidityHistory: previous.humidityHistory,
           recentReadings: previous.recentReadings,
           updatedAt: previous.updatedAt,
+          isDeviceLive: false,
           isLive: false,
           isWaterLevelLive: false,
           isFeederLevelLive: false,
@@ -432,9 +509,23 @@ class MonitoringStore extends ChangeNotifier with WidgetsBindingObserver {
     final nextTelemetry = _withSensorReading(previous, reading);
     _telemetryByBatch[sensorBatch.name] = nextTelemetry;
     if (reading.isLive ||
+        reading.isDeviceLive ||
         reading.isWaterLevelLive ||
         reading.isFeederLevelLive) {
       unawaited(_persistTelemetry(sensorBatch.name, nextTelemetry));
+    }
+    if (nextTelemetry.temperature > 0 && nextTelemetry.humidity > 0) {
+      unawaited(
+        EnvironmentalLogStore.instance.recordTelemetryIfDue(
+          batch: sensorBatch,
+          temperature: nextTelemetry.temperature,
+          humidity: nextTelemetry.humidity,
+          waterLevelPercent: nextTelemetry.waterLevelPercent,
+          waterDistanceCm: nextTelemetry.waterDistanceCm,
+          feederLevelPercent: nextTelemetry.feederLevelPercent,
+          feederDistanceCm: nextTelemetry.feederDistanceCm,
+        ),
+      );
     }
     notifyListeners();
   }
@@ -459,13 +550,23 @@ class MonitoringStore extends ChangeNotifier with WidgetsBindingObserver {
         feederDistanceCm: reading.isFeederLevelLive
             ? reading.feederDistanceCm
             : current.feederDistanceCm,
+        waterPumpEnabled: reading.waterPumpEnabled,
+        lightBulbEnabled: reading.lightBulbEnabled,
+        lightBulbOverrideActive: reading.lightBulbOverrideActive,
+        ventilationFanEnabled: reading.ventilationFanEnabled,
+        ventilationFanOverrideActive: reading.ventilationFanOverrideActive,
+        feederServoEnabled: reading.feederServoEnabled,
         deaths: current.deaths,
         temperatureHistory: current.temperatureHistory,
         humidityHistory: current.humidityHistory,
         recentReadings: current.recentReadings,
-        updatedAt: reading.isWaterLevelLive || reading.isFeederLevelLive
+        updatedAt:
+            reading.isDeviceLive ||
+                reading.isWaterLevelLive ||
+                reading.isFeederLevelLive
             ? DateTime.now()
             : current.updatedAt,
+        isDeviceLive: reading.isDeviceLive,
         isLive: false,
         isWaterLevelLive: reading.isWaterLevelLive,
         isFeederLevelLive: reading.isFeederLevelLive,
@@ -515,11 +616,18 @@ class MonitoringStore extends ChangeNotifier with WidgetsBindingObserver {
       waterDistanceCm: nextWaterDistance,
       feederLevelPercent: nextFeederLevel,
       feederDistanceCm: nextFeederDistance,
+      waterPumpEnabled: reading.waterPumpEnabled,
+      lightBulbEnabled: reading.lightBulbEnabled,
+      lightBulbOverrideActive: reading.lightBulbOverrideActive,
+      ventilationFanEnabled: reading.ventilationFanEnabled,
+      ventilationFanOverrideActive: reading.ventilationFanOverrideActive,
+      feederServoEnabled: reading.feederServoEnabled,
       deaths: current.deaths,
       temperatureHistory: nextTemperatureHistory,
       humidityHistory: nextHumidityHistory,
       recentReadings: nextReadings,
       updatedAt: DateTime.now(),
+      isDeviceLive: reading.isDeviceLive,
       isLive: reading.isLive,
       isWaterLevelLive: reading.isWaterLevelLive,
       isFeederLevelLive: reading.isFeederLevelLive,
@@ -546,6 +654,7 @@ class MonitoringStore extends ChangeNotifier with WidgetsBindingObserver {
 
       final current = _telemetryByBatch[batchName] ?? _seedTelemetry();
       if (current.isLive ||
+          current.isDeviceLive ||
           current.isWaterLevelLive ||
           current.isFeederLevelLive) {
         return;
@@ -557,6 +666,18 @@ class MonitoringStore extends ChangeNotifier with WidgetsBindingObserver {
       final waterDistance = _cachedDouble(decoded['water_distance_cm']);
       final feederLevel = _cachedDouble(decoded['feeder_level_percent']);
       final feederDistance = _cachedDouble(decoded['feeder_distance_cm']);
+      final waterPumpEnabled = _cachedBool(decoded['water_pump_enabled']);
+      final lightBulbEnabled = _cachedBool(decoded['light_bulb_enabled']);
+      final lightBulbOverrideActive = _cachedBool(
+        decoded['light_bulb_override_active'],
+      );
+      final ventilationFanEnabled = _cachedBool(
+        decoded['ventilation_fan_enabled'],
+      );
+      final ventilationFanOverrideActive = _cachedBool(
+        decoded['ventilation_fan_override_active'],
+      );
+      final feederServoEnabled = _cachedBool(decoded['feeder_servo_enabled']);
       final updatedAt =
           DateTime.tryParse(decoded['updated_at']?.toString() ?? '') ??
           current.updatedAt;
@@ -577,11 +698,21 @@ class MonitoringStore extends ChangeNotifier with WidgetsBindingObserver {
         waterDistanceCm: waterDistance ?? current.waterDistanceCm,
         feederLevelPercent: feederLevel ?? current.feederLevelPercent,
         feederDistanceCm: feederDistance ?? current.feederDistanceCm,
+        waterPumpEnabled: waterPumpEnabled ?? current.waterPumpEnabled,
+        lightBulbEnabled: lightBulbEnabled ?? current.lightBulbEnabled,
+        lightBulbOverrideActive:
+            lightBulbOverrideActive ?? current.lightBulbOverrideActive,
+        ventilationFanEnabled:
+            ventilationFanEnabled ?? current.ventilationFanEnabled,
+        ventilationFanOverrideActive:
+            ventilationFanOverrideActive ?? current.ventilationFanOverrideActive,
+        feederServoEnabled: feederServoEnabled ?? current.feederServoEnabled,
         deaths: current.deaths,
         temperatureHistory: current.temperatureHistory,
         humidityHistory: current.humidityHistory,
         recentReadings: current.recentReadings,
         updatedAt: updatedAt,
+        isDeviceLive: false,
         isLive: false,
         isWaterLevelLive: false,
         isFeederLevelLive: false,
@@ -615,6 +746,13 @@ class MonitoringStore extends ChangeNotifier with WidgetsBindingObserver {
       'water_distance_cm': telemetry.waterDistanceCm,
       'feeder_level_percent': telemetry.feederLevelPercent,
       'feeder_distance_cm': telemetry.feederDistanceCm,
+      'water_pump_enabled': telemetry.waterPumpEnabled,
+      'light_bulb_enabled': telemetry.lightBulbEnabled,
+      'light_bulb_override_active': telemetry.lightBulbOverrideActive,
+      'ventilation_fan_enabled': telemetry.ventilationFanEnabled,
+      'ventilation_fan_override_active':
+          telemetry.ventilationFanOverrideActive,
+      'feeder_servo_enabled': telemetry.feederServoEnabled,
       'updated_at': telemetry.updatedAt.toIso8601String(),
     });
 
@@ -644,15 +782,11 @@ class MonitoringStore extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   String? _cacheKey(String batchName) {
-    final userId = AuthStore.instance.currentUser?.id;
-    if (userId == null || userId.isEmpty) {
-      return null;
-    }
-
     final batch = BatchStore.instance.findByName(batchName);
     final batchId = batch?.stableId ?? batchName;
-    return '${_telemetryCachePrefix}_${_safeCacheKey(userId)}_'
-        '${_safeCacheKey(batchId)}';
+    return SharedWorkspace.localKey(
+      '${_telemetryCachePrefix}_${_safeCacheKey(batchId)}',
+    );
   }
 
   String _safeCacheKey(String value) {
@@ -673,6 +807,21 @@ class MonitoringStore extends ChangeNotifier with WidgetsBindingObserver {
     }
     return null;
   }
+
+  bool? _cachedBool(dynamic value) {
+    if (value is bool) {
+      return value;
+    }
+    if (value is String) {
+      if (value.toLowerCase() == 'true') {
+        return true;
+      }
+      if (value.toLowerCase() == 'false') {
+        return false;
+      }
+    }
+    return null;
+  }
 }
 
 class _SensorReading {
@@ -682,6 +831,13 @@ class _SensorReading {
   final double waterDistanceCm;
   final double feederLevelPercent;
   final double feederDistanceCm;
+  final bool waterPumpEnabled;
+  final bool lightBulbEnabled;
+  final bool lightBulbOverrideActive;
+  final bool ventilationFanEnabled;
+  final bool ventilationFanOverrideActive;
+  final bool feederServoEnabled;
+  final bool isDeviceLive;
   final bool isLive;
   final bool isWaterLevelLive;
   final bool isFeederLevelLive;
@@ -693,6 +849,13 @@ class _SensorReading {
     required this.waterDistanceCm,
     required this.feederLevelPercent,
     required this.feederDistanceCm,
+    required this.waterPumpEnabled,
+    required this.lightBulbEnabled,
+    required this.lightBulbOverrideActive,
+    required this.ventilationFanEnabled,
+    required this.ventilationFanOverrideActive,
+    required this.feederServoEnabled,
+    required this.isDeviceLive,
     required this.isLive,
     required this.isWaterLevelLive,
     required this.isFeederLevelLive,

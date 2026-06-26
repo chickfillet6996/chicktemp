@@ -3,8 +3,9 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'auth_store.dart';
 import 'batch_store.dart';
+import 'device_config_store.dart';
+import 'shared_workspace.dart';
 
 class BatchTemperatureSettings {
   final double minTemperature;
@@ -41,13 +42,30 @@ class TemperatureSettingsStore extends ChangeNotifier {
     return _settingsByBatch[batchName] ?? BatchTemperatureSettings.defaults;
   }
 
-  Future<void> loadFor(String batchName) async {
+  Future<void> loadFor(String batchName, {bool forceRefresh = false}) async {
     final key = _storageKey(batchName);
-    if (key == null || _loadedKeys.contains(key) || !_loadingKeys.add(key)) {
+    if (key == null ||
+        (!forceRefresh && _loadedKeys.contains(key)) ||
+        !_loadingKeys.add(key)) {
       return;
     }
 
     try {
+      final remoteSettings = await _loadRemote(batchName);
+      if (remoteSettings != null) {
+        _settingsByBatch[batchName] = remoteSettings;
+        _loadedKeys.add(key);
+        notifyListeners();
+        unawaited(
+          _persist(
+            batchName,
+            minTemperature: remoteSettings.minTemperature,
+            maxTemperature: remoteSettings.maxTemperature,
+          ),
+        );
+        return;
+      }
+
       final prefs = await SharedPreferences.getInstance();
       final minTemperature = prefs.getDouble('${key}_min');
       final maxTemperature = prefs.getDouble('${key}_max');
@@ -63,6 +81,31 @@ class TemperatureSettingsStore extends ChangeNotifier {
       _loadedKeys.add(key);
     } finally {
       _loadingKeys.remove(key);
+    }
+  }
+
+  Future<BatchTemperatureSettings?> _loadRemote(String batchName) async {
+    try {
+      final data = await DeviceConfigStore.instance
+          .loadTemperatureAutomationControl(batchName: batchName);
+      if (data == null) {
+        return null;
+      }
+
+      final minTemperature = _toDouble(data['min_temperature']);
+      final maxTemperature = _toDouble(data['max_temperature']);
+      if (minTemperature == null ||
+          maxTemperature == null ||
+          minTemperature >= maxTemperature) {
+        return null;
+      }
+
+      return BatchTemperatureSettings(
+        minTemperature: minTemperature,
+        maxTemperature: maxTemperature,
+      );
+    } on Object {
+      return null;
     }
   }
 
@@ -147,13 +190,9 @@ class TemperatureSettingsStore extends ChangeNotifier {
   }
 
   String? _storageKey(String batchName) {
-    final userId = AuthStore.instance.currentUser?.id;
-    if (userId == null || userId.isEmpty) {
-      return null;
-    }
     final batch = BatchStore.instance.findByName(batchName);
     final batchId = batch?.stableId ?? batchName;
-    return 'temperature_settings_${_safeKey(userId)}_${_safeKey(batchId)}';
+    return SharedWorkspace.localKey('temperature_settings_${_safeKey(batchId)}');
   }
 
   String _safeKey(String value) {
@@ -163,5 +202,15 @@ class TemperatureSettingsStore extends ChangeNotifier {
         .replaceAll(RegExp(r'[^a-z0-9]+'), '_')
         .replaceAll(RegExp(r'_+'), '_')
         .replaceAll(RegExp(r'^_|_$'), '');
+  }
+
+  double? _toDouble(dynamic value) {
+    if (value is num) {
+      return value.toDouble();
+    }
+    if (value is String) {
+      return double.tryParse(value);
+    }
+    return null;
   }
 }

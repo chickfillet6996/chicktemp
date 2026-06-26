@@ -5,9 +5,12 @@ import 'package:intl/intl.dart';
 import '../models/auth_store.dart';
 import '../models/batch_store.dart';
 import '../models/firebase_database_service.dart';
+import '../models/shared_workspace.dart';
+import '../models/shared_workspace_migration.dart';
 import 'analytics_screen.dart';
 import 'reports_screen.dart';
 import 'profile_screen.dart';
+import '../widgets/chicktemp_loading.dart';
 import '../widgets/splash_background.dart';
 import '../widgets/user_avatar_content.dart';
 
@@ -121,7 +124,7 @@ class _MortalityScreenState extends State<MortalityScreen> {
     if (user == null) {
       return '';
     }
-    return 'user_data/${user.id}/mortality_records/$_batchId';
+    return SharedWorkspace.path('mortality_records/$_batchId');
   }
 
   Future<void> _loadMortalityRecords() async {
@@ -132,7 +135,18 @@ class _MortalityScreenState extends State<MortalityScreen> {
     }
 
     try {
-      final response = await FirebaseDatabaseService.instance.get('$path.json');
+      var response = await FirebaseDatabaseService.instance.get('$path.json');
+      if (response is! Map<String, dynamic> || response.isEmpty) {
+        final legacyResponse = await _loadLegacyMortalityRecords();
+        if (legacyResponse is Map<String, dynamic> &&
+            legacyResponse.isNotEmpty) {
+          response = legacyResponse;
+          await FirebaseDatabaseService.instance.put(
+            '$path.json',
+            Map<String, dynamic>.from(legacyResponse),
+          );
+        }
+      }
       final records = <_MortalityRecord>[];
       if (response is Map<String, dynamic>) {
         for (final entry in response.entries) {
@@ -159,6 +173,29 @@ class _MortalityScreenState extends State<MortalityScreen> {
       }
       setState(() => _isLoadingRecords = false);
       _showMessage('Could not load mortality records: $error');
+    }
+  }
+
+  Future<Map<String, dynamic>?> _loadLegacyMortalityRecords() async {
+    final user = AuthStore.instance.currentUser;
+    if (user == null) {
+      return null;
+    }
+    return SharedWorkspaceMigration.instance.loadLegacyMap(
+      'mortality_records/$_batchId',
+      fallbackUserId: user.id,
+    );
+  }
+
+  Future<void> _refreshMortality() async {
+    try {
+      await BatchStore.instance.loadForCurrentUser();
+    } on Object {
+      // Mortality records can still refresh from the currently cached batch.
+    }
+    await _loadMortalityRecords();
+    if (mounted) {
+      setState(() {});
     }
   }
 
@@ -226,9 +263,12 @@ class _MortalityScreenState extends State<MortalityScreen> {
       backgroundColor: const Color(0xFFF4F7F3),
       body: SplashBackground(
         child: SafeArea(
-          child: ListView(
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
-            children: [
+          child: RefreshIndicator(
+            onRefresh: _refreshMortality,
+            child: ListView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
+              children: [
                 Container(
                   width: double.infinity,
                   padding: const EdgeInsets.fromLTRB(18, 18, 18, 20),
@@ -587,7 +627,10 @@ class _MortalityScreenState extends State<MortalityScreen> {
                         const Center(
                           child: Padding(
                             padding: EdgeInsets.all(18),
-                            child: CircularProgressIndicator(color: Color(0xFF2E7D32)),
+                            child: ChickTempLoading(
+                              text: 'Loading mortality records...',
+                              size: 48,
+                            ),
                           ),
                         )
                       else if (_records.isEmpty)
@@ -608,8 +651,9 @@ class _MortalityScreenState extends State<MortalityScreen> {
                     ],
                   ),
                 ),
-                const SizedBox(height: 24),
-            ],
+                  const SizedBox(height: 24),
+              ],
+            ),
           ),
         ),
       ),

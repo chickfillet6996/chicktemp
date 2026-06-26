@@ -1,5 +1,7 @@
 import 'auth_store.dart';
 import 'firebase_database_service.dart';
+import 'shared_workspace.dart';
+import 'shared_workspace_migration.dart';
 
 class DeviceConfigStore {
   DeviceConfigStore._();
@@ -25,6 +27,58 @@ class DeviceConfigStore {
     );
   }
 
+  Future<void> saveVentilationFanControl({
+    required String batchName,
+    required bool enabled,
+    int? manualOverrideDurationMs,
+    bool? manualOverrideCancel,
+    int? commandId,
+  }) async {
+    await _database.put(
+      _controlPath('ventilation_fan'),
+      {
+        'enabled': enabled,
+        if (manualOverrideDurationMs != null)
+          'manual_override_duration_ms': manualOverrideDurationMs,
+        if (manualOverrideCancel != null)
+          'manual_override_cancel': manualOverrideCancel,
+        if (commandId != null) 'command_id': commandId,
+        'source': 'controls_panel',
+        'updated_at': {'.sv': 'timestamp'},
+      },
+    );
+  }
+
+  Future<void> saveTemperatureAutomationControl({
+    required String batchName,
+    required double minTemperature,
+    required double maxTemperature,
+    bool enabled = true,
+  }) async {
+    await _database.put(
+      _controlPath('temperature_automation'),
+      {
+        'enabled': enabled,
+        'min_temperature': minTemperature,
+        'max_temperature': maxTemperature,
+        'source': 'temperature_settings',
+        'updated_at': {'.sv': 'timestamp'},
+      },
+    );
+  }
+
+  Future<Map<String, dynamic>?> loadTemperatureAutomationControl({
+    required String batchName,
+  }) async {
+    final response = await _database.get(
+      _controlPath('temperature_automation'),
+    );
+    if (response is Map<String, dynamic>) {
+      return response;
+    }
+    return null;
+  }
+
   Future<Map<String, dynamic>?> loadFeederConfig({
     required String batchName,
   }) async {
@@ -39,6 +93,30 @@ class DeviceConfigStore {
       section: 'feeder_configs',
       batchName: batchName,
       data: data,
+    );
+  }
+
+  Future<void> saveFeederServoControl({
+    required String batchName,
+    required bool enabled,
+    bool? schedulesEnabled,
+    int? durationMs,
+    double? grams,
+    int? commandId,
+    List<String>? scheduleCodes,
+  }) async {
+    await _database.put(
+      _controlPath('feeder_servo'),
+      {
+        'enabled': enabled,
+        if (schedulesEnabled != null) 'schedules_enabled': schedulesEnabled,
+        if (durationMs != null) 'duration_ms': durationMs,
+        if (grams != null) 'grams': grams,
+        if (commandId != null) 'command_id': commandId,
+        if (scheduleCodes != null) 'schedule_codes': scheduleCodes,
+        'source': 'controls_panel',
+        'updated_at': {'.sv': 'timestamp'},
+      },
     );
   }
 
@@ -62,11 +140,21 @@ class DeviceConfigStore {
   Future<void> saveWaterPumpControl({
     required String batchName,
     required bool enabled,
+    bool? schedulesEnabled,
+    int? durationMs,
+    double? liters,
+    int? commandId,
+    List<String>? scheduleCodes,
   }) async {
     await _database.put(
-      'controls/${_batchKey(batchName)}/water_pump.json',
+      _controlPath('water_pump'),
       {
         'enabled': enabled,
+        if (schedulesEnabled != null) 'schedules_enabled': schedulesEnabled,
+        if (durationMs != null) 'duration_ms': durationMs,
+        if (liters != null) 'liters': liters,
+        if (commandId != null) 'command_id': commandId,
+        if (scheduleCodes != null) 'schedule_codes': scheduleCodes,
         'source': 'controls_panel',
         'updated_at': {'.sv': 'timestamp'},
       },
@@ -93,11 +181,19 @@ class DeviceConfigStore {
   Future<void> saveLightBulbControl({
     required String batchName,
     required bool enabled,
+    int? manualOverrideDurationMs,
+    bool? manualOverrideCancel,
+    int? commandId,
   }) async {
     await _database.put(
-      'controls/${_batchKey(batchName)}/light_bulb.json',
+      _controlPath('light_bulb'),
       {
         'enabled': enabled,
+        if (manualOverrideDurationMs != null)
+          'manual_override_duration_ms': manualOverrideDurationMs,
+        if (manualOverrideCancel != null)
+          'manual_override_cancel': manualOverrideCancel,
+        if (commandId != null) 'command_id': commandId,
         'source': 'controls_panel',
         'updated_at': {'.sv': 'timestamp'},
       },
@@ -122,7 +218,7 @@ class DeviceConfigStore {
 
     for (final section in sections) {
       await _database.delete(
-        'user_data/${user.id}/$section/$batchKey.json',
+        SharedWorkspace.path('$section/$batchKey.json'),
       );
     }
   }
@@ -136,13 +232,33 @@ class DeviceConfigStore {
       return null;
     }
 
+    final configPath = '$section/${_batchKey(batchName)}.json';
     final response = await _database.get(
-      'user_data/${user.id}/$section/${_batchKey(batchName)}.json',
+      SharedWorkspace.path(configPath),
     );
     if (response is Map<String, dynamic>) {
       return response;
     }
+
+    final legacyResponse = await _loadLegacyConfig(user.id, configPath);
+    if (legacyResponse is Map<String, dynamic>) {
+      await _database.put(
+        SharedWorkspace.path(configPath),
+        Map<String, dynamic>.from(legacyResponse),
+      );
+      return legacyResponse;
+    }
     return null;
+  }
+
+  Future<Map<String, dynamic>?> _loadLegacyConfig(
+    String currentUserId,
+    String configPath,
+  ) async {
+    return SharedWorkspaceMigration.instance.loadLegacyMap(
+      configPath,
+      fallbackUserId: currentUserId,
+    );
   }
 
   Future<void> _saveConfig({
@@ -156,7 +272,7 @@ class DeviceConfigStore {
     }
 
     await _database.put(
-      'user_data/${user.id}/$section/${_batchKey(batchName)}.json',
+      SharedWorkspace.path('$section/${_batchKey(batchName)}.json'),
       data,
     );
   }
@@ -169,5 +285,9 @@ class DeviceConfigStore {
         .replaceAll(RegExp(r'_+'), '_')
         .replaceAll(RegExp(r'^_|_$'), '');
     return key.isEmpty ? 'default_batch' : key;
+  }
+
+  String _controlPath(String controlName) {
+    return 'controls/${SharedWorkspace.hardwareControlBatchKey}/$controlName.json';
   }
 }

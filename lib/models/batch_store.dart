@@ -6,6 +6,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'auth_store.dart';
 import 'firebase_database_service.dart';
+import 'shared_workspace.dart';
+import 'shared_workspace_migration.dart';
 
 class BatchItem {
   final String id;
@@ -15,6 +17,8 @@ class BatchItem {
   final String dayLabel;
   final String birdsLabel;
   final int mortalityCount;
+  final int? dayAnchorDay;
+  final DateTime? dayAnchorDate;
 
   const BatchItem({
     this.id = '',
@@ -24,6 +28,8 @@ class BatchItem {
     required this.dayLabel,
     required this.birdsLabel,
     this.mortalityCount = 0,
+    this.dayAnchorDay,
+    this.dayAnchorDate,
   });
 
   BatchItem copyWith({
@@ -34,6 +40,9 @@ class BatchItem {
     String? dayLabel,
     String? birdsLabel,
     int? mortalityCount,
+    int? dayAnchorDay,
+    DateTime? dayAnchorDate,
+    bool clearDayAnchor = false,
   }) {
     return BatchItem(
       id: id ?? this.id,
@@ -43,6 +52,12 @@ class BatchItem {
       dayLabel: dayLabel ?? this.dayLabel,
       birdsLabel: birdsLabel ?? this.birdsLabel,
       mortalityCount: mortalityCount ?? this.mortalityCount,
+      dayAnchorDay: clearDayAnchor
+          ? null
+          : dayAnchorDay ?? this.dayAnchorDay,
+      dayAnchorDate: clearDayAnchor
+          ? null
+          : dayAnchorDate ?? this.dayAnchorDate,
     );
   }
 
@@ -57,6 +72,8 @@ class BatchItem {
       dayLabel: dayLabel,
       birdsLabel: '${json['total_chickens'] ?? 0} Birds',
       mortalityCount: _readInt(json['mortality_count']),
+      dayAnchorDay: _readNullableInt(json['day_anchor_day']),
+      dayAnchorDate: _readDate(json['day_anchor_date']),
     );
   }
 
@@ -69,15 +86,21 @@ class BatchItem {
       'total_chickens': _birdsCount,
       'mortality_count': mortalityCount,
       'is_active': status.toUpperCase() == 'ACTIVE',
+      if (dayAnchorDay != null) 'day_anchor_day': dayAnchorDay,
+      if (dayAnchorDate != null)
+        'day_anchor_date': _dateOnlyIso(dayAnchorDate!),
     };
   }
 
   String get stableId => id.isNotEmpty ? id : _safeKey(name);
 
   BatchItem withElapsedDay([DateTime? currentDate]) {
+    if (status.toUpperCase() == 'INACTIVE') {
+      return this;
+    }
+
     final dayMatch = RegExp(r'(\d+)\s*/\s*(\d+)').firstMatch(dayLabel);
-    final startDate = _parseStartedAt(startedAt);
-    if (dayMatch == null || startDate == null) {
+    if (dayMatch == null) {
       return this;
     }
 
@@ -89,15 +112,22 @@ class BatchItem {
 
     final now = currentDate ?? DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
-    final firstDay = DateTime(startDate.year, startDate.month, startDate.day);
-    final elapsedDay = today.difference(firstDay).inDays + 1;
-    final calculatedDay = elapsedDay.clamp(1, totalDays).toInt();
-    final nextDay = savedDay > calculatedDay ? savedDay : calculatedDay;
+    final anchorDate = dayAnchorDate;
+    final anchorDay = dayAnchorDay;
+    final calculatedDay = anchorDate != null && anchorDay != null
+        ? _calculatedDayFromAnchor(
+            anchorDay: anchorDay,
+            anchorDate: anchorDate,
+            today: today,
+          )
+        : _calculatedDayFromStart(
+            startedAt: startedAt,
+            today: today,
+            savedDay: savedDay,
+          );
+    final nextDay = calculatedDay.clamp(1, totalDays).toInt();
     final nextLabel = 'Day $nextDay / $totalDays';
-    final nextStatus =
-        status.toUpperCase() == 'INACTIVE' || nextDay >= totalDays
-        ? 'INACTIVE'
-        : 'ACTIVE';
+    final nextStatus = nextDay >= totalDays ? 'INACTIVE' : 'ACTIVE';
 
     if (nextLabel == dayLabel && nextStatus == status) {
       return this;
@@ -131,6 +161,70 @@ class BatchItem {
       return int.tryParse(value) ?? 0;
     }
     return 0;
+  }
+
+  static int? _readNullableInt(dynamic value) {
+    if (value is int) {
+      return value;
+    }
+    if (value is num) {
+      return value.toInt();
+    }
+    if (value is String) {
+      return int.tryParse(value);
+    }
+    return null;
+  }
+
+  static DateTime? _readDate(dynamic value) {
+    if (value is String && value.trim().isNotEmpty) {
+      return DateTime.tryParse(value)?.toLocal();
+    }
+    if (value is num) {
+      return DateTime.fromMillisecondsSinceEpoch(value.toInt()).toLocal();
+    }
+    return null;
+  }
+
+  static DateTime _dateOnly(DateTime value) {
+    return DateTime(value.year, value.month, value.day);
+  }
+
+  static String _dateOnlyIso(DateTime value) {
+    final date = _dateOnly(value);
+    return date.toIso8601String();
+  }
+
+  static int _calculatedDayFromStart({
+    required String startedAt,
+    required DateTime today,
+    required int savedDay,
+  }) {
+    final startDate = _parseStartedAt(startedAt);
+    if (startDate == null) {
+      return savedDay;
+    }
+
+    final firstDay = _dateOnly(startDate);
+    final elapsedDay = today.difference(firstDay).inDays + 1;
+    return elapsedDay > savedDay ? elapsedDay : savedDay;
+  }
+
+  static int _calculatedDayFromAnchor({
+    required int anchorDay,
+    required DateTime anchorDate,
+    required DateTime today,
+  }) {
+    final calculatedDay = anchorDay + today.difference(_dateOnly(anchorDate)).inDays;
+    return calculatedDay > anchorDay ? calculatedDay : anchorDay;
+  }
+
+  static int? _currentDayFromLabel(String dayLabel) {
+    final match = RegExp(r'(\d+)\s*/\s*(\d+)').firstMatch(dayLabel);
+    if (match == null) {
+      return null;
+    }
+    return int.tryParse(match.group(1) ?? '');
   }
 
   static DateTime? _parseStartedAt(String value) {
@@ -215,10 +309,36 @@ class BatchStore extends ChangeNotifier {
     return List.unmodifiable(_batches);
   }
 
+  BatchItem? get activeBatch {
+    _refreshElapsedDays();
+    for (final batch in _batches) {
+      if (_isActive(batch)) {
+        return batch;
+      }
+    }
+    return null;
+  }
+
+  List<BatchItem> get activeBatches {
+    _refreshElapsedDays();
+    return List.unmodifiable(_batches.where(_isActive));
+  }
+
+  List<BatchItem> get historyBatches {
+    _refreshElapsedDays();
+    return List.unmodifiable(_batches.where((batch) => !_isActive(batch)));
+  }
+
+  bool get hasActiveBatch => activeBatch != null;
+
   bool get isEmpty => _batches.isEmpty;
 
   void add(BatchItem batch) {
+    _refreshElapsedDays();
     final savedBatch = batch.copyWith(id: batch.stableId).withElapsedDay();
+    if (_isActive(savedBatch) && _batches.any(_isActive)) {
+      throw StateError('Finish the active batch before creating a new one.');
+    }
     _batches.add(savedBatch);
     notifyListeners();
     unawaited(_saveLocalCache());
@@ -243,7 +363,10 @@ class BatchStore extends ChangeNotifier {
       return;
     }
 
-    final savedBatch = updated.copyWith(id: previous.stableId);
+    final savedBatch = updated.copyWith(
+      id: previous.stableId,
+      clearDayAnchor: previous.startedAt != updated.startedAt,
+    );
     _batches[index] = savedBatch;
     notifyListeners();
     unawaited(_saveLocalCache());
@@ -302,6 +425,31 @@ class BatchStore extends ChangeNotifier {
     _saveBatch(next);
   }
 
+  Future<BatchItem?> finishBatch({
+    required String batchId,
+  }) async {
+    final index = _batches.indexWhere((batch) => batch.stableId == batchId);
+    if (index == -1) {
+      return null;
+    }
+
+    final previous = _batches[index];
+    final finished = previous.copyWith(status: 'INACTIVE');
+    _batches[index] = finished;
+    notifyListeners();
+    await _saveLocalCache();
+
+    try {
+      await _persistBatch(finished);
+      return finished;
+    } on Object {
+      _batches[index] = previous;
+      await _saveLocalCache();
+      notifyListeners();
+      rethrow;
+    }
+  }
+
   Future<BatchItem?> updateDayLabel({
     required String batchId,
     required String dayLabel,
@@ -313,9 +461,13 @@ class BatchStore extends ChangeNotifier {
     }
 
     final previous = _batches[index];
+    final anchorDay = BatchItem._currentDayFromLabel(dayLabel);
+    final now = DateTime.now();
     final updated = previous.copyWith(
       dayLabel: dayLabel,
       status: _statusForDayLabel(dayLabel),
+      dayAnchorDay: anchorDay,
+      dayAnchorDate: BatchItem._dateOnly(now),
     );
     _batches[index] = updated;
     if (notifyListenersOnChange) {
@@ -344,7 +496,17 @@ class BatchStore extends ChangeNotifier {
 
     dynamic response;
     try {
-      response = await _database.get('user_data/${user.id}/batches.json');
+      response = await _database.get(SharedWorkspace.path('batches.json'));
+      if (response is! Map<String, dynamic> || response.isEmpty) {
+        final legacyResponse = await _loadLegacyBatches(user.id);
+        if (legacyResponse != null && legacyResponse.isNotEmpty) {
+          response = legacyResponse;
+          await _database.put(
+            SharedWorkspace.path('batches.json'),
+            legacyResponse,
+          );
+        }
+      }
     } on Object {
       final restored = await _loadLocalCache();
       if (restored) {
@@ -367,8 +529,17 @@ class BatchStore extends ChangeNotifier {
         _batches.add(BatchItem.fromJson(entry.key, value).withElapsedDay());
       }
     }
+    final normalizedBatches = _normalizeSingleActiveBatch();
     await _saveLocalCache();
+    _persistBatchUpdates(normalizedBatches);
     notifyListeners();
+  }
+
+  Future<Map<String, dynamic>?> _loadLegacyBatches(String currentUserId) async {
+    return SharedWorkspaceMigration.instance.loadLegacyMap(
+      'batches',
+      fallbackUserId: currentUserId,
+    );
   }
 
   Future<void> saveAllForCurrentUser() async {
@@ -381,7 +552,13 @@ class BatchStore extends ChangeNotifier {
       for (final batch in _batches)
         batch.stableId: batch.withElapsedDay().toJson(),
     };
-    await _database.put('user_data/${user.id}/batches.json', batchesJson);
+    if (batchesJson.isEmpty) {
+      final existing = await _database.get(SharedWorkspace.path('batches.json'));
+      if (existing is Map<String, dynamic> && existing.isNotEmpty) {
+        return;
+      }
+    }
+    await _database.put(SharedWorkspace.path('batches.json'), batchesJson);
     await _saveLocalCache();
   }
 
@@ -400,7 +577,11 @@ class BatchStore extends ChangeNotifier {
       return;
     }
 
-    unawaited(_database.delete('user_data/${user.id}/batches/${batch.stableId}.json'));
+    unawaited(
+      _database.delete(
+        SharedWorkspace.path('batches/${batch.stableId}.json'),
+      ),
+    );
   }
 
   Future<void> _persistBatch(BatchItem batch) async {
@@ -410,7 +591,7 @@ class BatchStore extends ChangeNotifier {
     }
 
     await _database.put(
-      'user_data/${user.id}/batches/${batch.stableId}.json',
+      SharedWorkspace.path('batches/${batch.stableId}.json'),
       batch.toJson(),
     );
   }
@@ -425,12 +606,61 @@ class BatchStore extends ChangeNotifier {
       }
     }
 
+    final normalizedBatches = _normalizeSingleActiveBatch();
+    if (normalizedBatches.isNotEmpty) {
+      changed = true;
+    }
+
     if (!changed) {
       return;
     }
     unawaited(_saveLocalCache());
+    _persistBatchUpdates(normalizedBatches);
     if (notify) {
       notifyListeners();
+    }
+  }
+
+  List<BatchItem> _normalizeSingleActiveBatch() {
+    final activeIndexes = <int>[];
+    for (var index = 0; index < _batches.length; index++) {
+      if (_isActive(_batches[index])) {
+        activeIndexes.add(index);
+      }
+    }
+
+    if (activeIndexes.length <= 1) {
+      return const [];
+    }
+
+    final keeperIndex = activeIndexes.reduce((bestIndex, nextIndex) {
+      final bestDate = BatchItem._parseStartedAt(_batches[bestIndex].startedAt);
+      final nextDate = BatchItem._parseStartedAt(_batches[nextIndex].startedAt);
+      if (nextDate == null && bestDate != null) {
+        return bestIndex;
+      }
+      if (nextDate != null &&
+          (bestDate == null || !nextDate.isBefore(bestDate))) {
+        return nextIndex;
+      }
+      return bestIndex;
+    });
+
+    final changedBatches = <BatchItem>[];
+    for (final index in activeIndexes) {
+      if (index == keeperIndex) {
+        continue;
+      }
+      final inactive = _batches[index].copyWith(status: 'INACTIVE');
+      _batches[index] = inactive;
+      changedBatches.add(inactive);
+    }
+    return changedBatches;
+  }
+
+  void _persistBatchUpdates(Iterable<BatchItem> batches) {
+    for (final batch in batches) {
+      _saveBatch(batch);
     }
   }
 
@@ -452,7 +682,17 @@ class BatchStore extends ChangeNotifier {
 
     try {
       final prefs = await SharedPreferences.getInstance();
-      final raw = prefs.getString(cacheKey);
+      var raw = prefs.getString(cacheKey);
+      if (raw == null || raw.isEmpty) {
+        final userId = AuthStore.instance.currentUser?.id;
+        if (userId != null && userId.isNotEmpty) {
+          final legacyKey = '${_batchCachePrefix}_${_safeCacheKey(userId)}';
+          raw = prefs.getString(legacyKey);
+          if (raw != null && raw.isNotEmpty) {
+            await prefs.setString(cacheKey, raw);
+          }
+        }
+      }
       if (raw == null || raw.isEmpty) {
         return false;
       }
@@ -469,6 +709,7 @@ class BatchStore extends ChangeNotifier {
           _batches.add(BatchItem.fromJson(entry.key, value).withElapsedDay());
         }
       }
+      _normalizeSingleActiveBatch();
       return true;
     } on Object {
       return false;
@@ -493,16 +734,13 @@ class BatchStore extends ChangeNotifier {
     }
   }
 
-  String? get _localCacheKey {
-    final userId = AuthStore.instance.currentUser?.id;
-    if (userId == null || userId.isEmpty) {
-      return null;
-    }
-    final safeUserId = userId
+  String? get _localCacheKey => SharedWorkspace.localKey(_batchCachePrefix);
+
+  String _safeCacheKey(String value) {
+    return value
         .trim()
         .toLowerCase()
         .replaceAll(RegExp(r'[^a-z0-9]+'), '_');
-    return '${_batchCachePrefix}_$safeUserId';
   }
 
   static String _statusForDayLabel(String dayLabel) {
@@ -518,5 +756,9 @@ class BatchStore extends ChangeNotifier {
     }
 
     return currentDay >= totalDays ? 'INACTIVE' : 'ACTIVE';
+  }
+
+  static bool _isActive(BatchItem batch) {
+    return batch.status.toUpperCase() == 'ACTIVE';
   }
 }
