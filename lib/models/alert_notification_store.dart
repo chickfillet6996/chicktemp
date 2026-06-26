@@ -333,8 +333,13 @@ class AlertNotificationStore extends ChangeNotifier {
 
   Future<List<AlertNotificationItem>> _buildAlerts() async {
     final now = DateTime.now();
-    final batches = BatchStore.instance.batches;
-    final sensorBatchName = _preferredSensorBatchName(batches);
+    final activeBatch = BatchStore.instance.activeBatch;
+    if (activeBatch == null) {
+      return const [];
+    }
+
+    final batches = [activeBatch];
+    final sensorBatchName = activeBatch.name;
     final alerts = <AlertNotificationItem>[];
 
     final futures = batches.map(
@@ -576,23 +581,6 @@ class AlertNotificationStore extends ChangeNotifier {
       nextAt: nextAt,
       isActive: statusText != 'inactive',
     );
-  }
-
-  String? _preferredSensorBatchName(List<BatchItem> batches) {
-    if (batches.isEmpty) {
-      return null;
-    }
-
-    for (final batch in batches) {
-      final key = '${batch.name} ${batch.stableId}'.toLowerCase();
-      if (key.contains('batch 1') ||
-          key.contains('batch_1') ||
-          key.contains('broiler_batch_1')) {
-        return batch.name;
-      }
-    }
-
-    return batches.last.name;
   }
 
   String _formatTemperature(double value) {

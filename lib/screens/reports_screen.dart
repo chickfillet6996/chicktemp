@@ -936,7 +936,12 @@ class _ReportsScreenState extends State<ReportsScreen> {
   }
 
   _ReportPreviewData _compactReportForPdf(_ReportPreviewData report) {
-    final maxLinesPerSection = report.charts.isEmpty ? 5 : 4;
+    final isEnvironmentalReport = report.title == 'Daily Environmental Report';
+    final maxLinesPerSection = isEnvironmentalReport
+        ? 12
+        : report.charts.isEmpty
+            ? 5
+            : 4;
     final sections = report.sections.take(3).map((section) {
       final trimmedLines = section.lines.take(maxLinesPerSection).toList();
       if (section.lines.length > maxLinesPerSection) {
@@ -1207,9 +1212,9 @@ class _ReportsScreenState extends State<ReportsScreen> {
       final averageHumidity = humidities.isEmpty
           ? latestHumidity
           : humidities.reduce((a, b) => a + b) / humidities.length;
-      final recentLines = _takeLast(logs, 5).reversed.map((log) {
+      final recentLines = _takeLast(logs, 12).map((log) {
         final time = DateFormat('MMM d, yyyy h:mm a').format(log.recordedAt);
-        return '$time | ${log.temperature.toStringAsFixed(1)} C | ${log.humidity.toStringAsFixed(0)}%';
+        return '$time | Temp ${log.temperature.toStringAsFixed(1)} C | Humidity ${log.humidity.toStringAsFixed(0)}% | Water ${log.waterLevelPercent.toStringAsFixed(0)}% | Feeder ${log.feederLevelPercent.toStringAsFixed(0)}%';
       }).toList();
 
       return _ReportPreviewData(
@@ -1236,34 +1241,6 @@ class _ReportsScreenState extends State<ReportsScreen> {
             value: '${averageHumidity.toStringAsFixed(0)}%',
           ),
         ],
-        charts: [
-          _ReportChartData(
-            title: 'Recent Temperature',
-            color: PdfColor.fromInt(0xFF2E7D32),
-            entries: _takeLast(logs, 8)
-                .map(
-                  (log) => _ReportChartEntry(
-                    label: DateFormat('h:mm a').format(log.recordedAt),
-                    value: log.temperature,
-                    formattedValue: '${log.temperature.toStringAsFixed(1)} C',
-                  ),
-                )
-                .toList(),
-          ),
-          _ReportChartData(
-            title: 'Recent Humidity',
-            color: PdfColor.fromInt(0xFF0F766E),
-            entries: _takeLast(logs, 8)
-                .map(
-                  (log) => _ReportChartEntry(
-                    label: DateFormat('h:mm a').format(log.recordedAt),
-                    value: log.humidity,
-                    formattedValue: '${log.humidity.toStringAsFixed(0)}%',
-                  ),
-                )
-                .toList(),
-          ),
-        ],
         sections: [
           _ReportPreviewSection(
             title: 'Overview',
@@ -1275,7 +1252,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
             ],
           ),
           _ReportPreviewSection(
-            title: 'Recent Environmental Data',
+            title: '15-Minute Environmental Logs',
             lines: recentLines.isNotEmpty
                 ? recentLines
                 : ['No environmental logs are available for this batch yet.'],
