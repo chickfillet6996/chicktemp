@@ -1,17 +1,17 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:typed_data';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
-import 'package:printing/printing.dart';
 
 import 'analytics_screen.dart';
 import '../models/auth_store.dart';
 import '../models/batch_store.dart';
-import '../models/device_config_store.dart';
 import '../models/environmental_log_store.dart';
 import '../models/monitoring_store.dart';
 import '../models/report_record_store.dart';
@@ -27,7 +27,7 @@ enum _ComposerMode { event, maintenance }
 enum _ReportTemplate {
   dailyEnvironmental,
   mortality,
-  deviceActivity,
+  events,
   maintenance,
   batchSummary,
 }
@@ -44,6 +44,8 @@ class ReportsScreen extends StatefulWidget {
 }
 
 class _ReportsScreenState extends State<ReportsScreen> {
+  static const MethodChannel _fileChannel = MethodChannel('chicktemp/files');
+
   late String _selectedBatch;
   _ReportsTab _selectedTab = _ReportsTab.reportCenter;
   _ComposerMode? _composerMode;
@@ -55,10 +57,6 @@ class _ReportsScreenState extends State<ReportsScreen> {
   final Map<String, List<_ReportEntry>> _eventsByBatch = {};
   final Map<String, List<_ReportEntry>> _maintenanceByBatch = {};
   List<EnvironmentalLog> _dailyLogs = const [];
-  Map<String, dynamic>? _ventilationConfig;
-  Map<String, dynamic>? _feederConfig;
-  Map<String, dynamic>? _waterConfig;
-  Map<String, dynamic>? _lightingConfig;
   final Map<_ReportTemplate, _ExportRange> _exportRangeByTemplate = {};
   _ReportTemplate? _expandedReportTemplate;
   bool _isLoadingBatchData = false;
@@ -218,24 +216,6 @@ class _ReportsScreenState extends State<ReportsScreen> {
         EnvironmentalLogStore.instance.fetchRecentLogs(limit: 240),
         _fetchReportRecordsForSelectedBatch(ReportRecordType.event),
         _fetchReportRecordsForSelectedBatch(ReportRecordType.maintenance),
-        _safeLoadConfig(
-          DeviceConfigStore.instance.loadVentilationConfig(
-            batchName: _selectedBatch,
-          ),
-        ),
-        _safeLoadConfig(
-          DeviceConfigStore.instance.loadFeederConfig(
-            batchName: _selectedBatch,
-          ),
-        ),
-        _safeLoadConfig(
-          DeviceConfigStore.instance.loadWaterConfig(batchName: _selectedBatch),
-        ),
-        _safeLoadConfig(
-          DeviceConfigStore.instance.loadLightingConfig(
-            batchName: _selectedBatch,
-          ),
-        ),
       ]);
 
       final logs =
@@ -253,10 +233,6 @@ class _ReportsScreenState extends State<ReportsScreen> {
       final maintenance = (results[2] as List<ReportRecord>)
           .map(_ReportEntry.fromRecord)
           .toList();
-      final ventilationConfig = results[3] as Map<String, dynamic>?;
-      final feederConfig = results[4] as Map<String, dynamic>?;
-      final waterConfig = results[5] as Map<String, dynamic>?;
-      final lightingConfig = results[6] as Map<String, dynamic>?;
 
       if (!mounted) {
         return;
@@ -266,10 +242,6 @@ class _ReportsScreenState extends State<ReportsScreen> {
         _dailyLogs = logs;
         _eventsByBatch[_selectedBatch] = events;
         _maintenanceByBatch[_selectedBatch] = maintenance;
-        _ventilationConfig = ventilationConfig;
-        _feederConfig = feederConfig;
-        _waterConfig = waterConfig;
-        _lightingConfig = lightingConfig;
         _isLoadingBatchData = false;
       });
     } catch (error) {
@@ -561,11 +533,12 @@ class _ReportsScreenState extends State<ReportsScreen> {
       color: Color(0xFFB45309),
     ),
     _ReportDefinition(
-      type: _ReportTemplate.deviceActivity,
-      title: 'Device Activity Report',
-      subtitle: 'Sensor status, sync time, and live activity',
-      icon: Icons.memory_rounded,
-      color: Color(0xFF2563EB),
+      type: _ReportTemplate.events,
+      title: 'Events Report',
+      subtitle: 'Farm events and important notes',
+      icon: Icons.event_note_rounded,
+      color: Color(0xFFE53935),
+      supportsRange: true,
     ),
     _ReportDefinition(
       type: _ReportTemplate.maintenance,
@@ -609,6 +582,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
   bool _supportsExportRange(_ReportTemplate type) {
     return type == _ReportTemplate.dailyEnvironmental ||
+        type == _ReportTemplate.events ||
         type == _ReportTemplate.maintenance;
   }
 
@@ -621,12 +595,15 @@ class _ReportsScreenState extends State<ReportsScreen> {
     final includeRange = _supportsExportRange(type);
     try {
       final bytes = await _buildPdfBytes(report);
-      await Printing.sharePdf(
-        bytes: bytes,
-        filename: _buildPdfFileName(
-          report.title,
-          includeRange ? exportRange : null,
-        ),
+      final savedLocation = await _savePdfFile(
+        bytes,
+        _buildPdfFileName(report.title, includeRange ? exportRange : null),
+      );
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('PDF downloaded: $savedLocation')),
       );
     } catch (error) {
       if (!mounted) {
@@ -651,14 +628,65 @@ class _ReportsScreenState extends State<ReportsScreen> {
     return '${safeTitle}_${range.name}_$generatedAt.pdf';
   }
 
-  Future<Map<String, dynamic>?> _safeLoadConfig(
-    Future<Map<String, dynamic>?> future,
-  ) async {
-    try {
-      return await future;
-    } on Object {
-      return null;
+  Future<String> _savePdfFile(Uint8List bytes, String fileName) async {
+    if (Platform.isAndroid) {
+      try {
+        final savedLocation = await _fileChannel.invokeMethod<String>(
+          'savePdfToDownloads',
+          {'fileName': fileName, 'bytes': bytes},
+        );
+        if (savedLocation != null && savedLocation.isNotEmpty) {
+          return savedLocation;
+        }
+      } on Object {
+        // Fall back to app-specific storage if Android blocks public Downloads.
+      }
     }
+
+    Object? lastError;
+    final directories = await _pdfDownloadDirectories();
+
+    for (final directory in directories) {
+      try {
+        await directory.create(recursive: true);
+        var file = File('${directory.path}${Platform.pathSeparator}$fileName');
+        var suffix = 2;
+        while (await file.exists()) {
+          final dotIndex = fileName.lastIndexOf('.');
+          final baseName = dotIndex == -1 ? fileName : fileName.substring(0, dotIndex);
+          final extension = dotIndex == -1 ? '' : fileName.substring(dotIndex);
+          file = File(
+            '${directory.path}${Platform.pathSeparator}${baseName}_$suffix$extension',
+          );
+          suffix += 1;
+        }
+        await file.writeAsBytes(bytes, flush: true);
+        return file.path;
+      } on Object catch (error) {
+        lastError = error;
+      }
+    }
+
+    throw lastError ?? StateError('No writable download folder was found.');
+  }
+
+  Future<List<Directory>> _pdfDownloadDirectories() async {
+    final directories = <Directory>[];
+
+    final home = Platform.environment['USERPROFILE'] ??
+        Platform.environment['HOME'];
+    if (home != null && home.isNotEmpty) {
+      directories.add(Directory('$home${Platform.pathSeparator}Downloads'));
+    }
+
+    directories.add(Directory.current);
+    directories.add(Directory.systemTemp);
+
+    final uniquePaths = <String>{};
+    return [
+      for (final directory in directories)
+        if (uniquePaths.add(directory.path)) directory,
+    ];
   }
 
   List<EnvironmentalLog> _reportLogs(BatchTelemetry telemetry) {
@@ -766,98 +794,6 @@ class _ReportsScreenState extends State<ReportsScreen> {
       case _ExportRange.week:
         return 'Weekly';
     }
-  }
-
-  List<_ReportDeviceUsageItem> _deviceUsageItems() {
-    return [
-      ..._readDeviceUsageItems(
-        _waterConfig,
-        category: 'Water',
-        includeGlobalSchedules: true,
-      ),
-      ..._readDeviceUsageItems(
-        _feederConfig,
-        category: 'Feeder',
-        includeGlobalSchedules: true,
-      ),
-      ..._readDeviceUsageItems(_ventilationConfig, category: 'Ventilation'),
-      ..._readDeviceUsageItems(_lightingConfig, category: 'Lighting'),
-    ];
-  }
-
-  List<_ReportDeviceUsageItem> _readDeviceUsageItems(
-    Map<String, dynamic>? json, {
-    required String category,
-    bool includeGlobalSchedules = false,
-  }) {
-    if (json == null) {
-      return const [];
-    }
-
-    final globalScheduleCount = includeGlobalSchedules
-        ? _countActiveScheduleLabels(
-            (json['global_schedules'] as List<dynamic>? ?? const []).map(
-              (value) => value.toString(),
-            ),
-          )
-        : 0;
-
-    final scheduleCounts = <String, int>{};
-    final rawDeviceSchedules = json['device_schedules'];
-    if (rawDeviceSchedules is Map<String, dynamic>) {
-      for (final entry in rawDeviceSchedules.entries) {
-        final schedules = (entry.value as List<dynamic>? ?? const [])
-            .map((item) => item.toString())
-            .toList();
-        scheduleCounts[entry.key] =
-            _countActiveScheduleLabels(schedules) + globalScheduleCount;
-      }
-    }
-
-    final devices = json['devices'];
-    if (devices is! List<dynamic>) {
-      return const [];
-    }
-
-    return devices.whereType<Map<String, dynamic>>().map((device) {
-      final id = device['id']?.toString().trim() ?? '';
-      final name = device['name']?.toString().trim() ?? '';
-      final description = device['description']?.toString().trim() ?? '';
-      return _ReportDeviceUsageItem(
-        category: category,
-        name: name.isEmpty ? '$category Device' : name,
-        id: id.isEmpty ? 'No ID' : id,
-        description: description,
-        enabled: device['enabled'] == true,
-        scheduleCount: scheduleCounts[id] ?? globalScheduleCount,
-      );
-    }).toList();
-  }
-
-  int _countActiveScheduleLabels(Iterable<String> labels) {
-    return labels.where(_isActiveScheduleLabel).length;
-  }
-
-  bool _isActiveScheduleLabel(String label) {
-    final normalized = label.trim();
-    if (normalized.isEmpty) {
-      return false;
-    }
-
-    final parts = normalized
-        .split('-')
-        .map((part) => part.trim())
-        .where((part) => part.isNotEmpty)
-        .toList();
-    if (parts.isEmpty || !_looksLikeTimeLabel(parts.first)) {
-      return false;
-    }
-
-    return parts.any((part) => part.toLowerCase() == 'active');
-  }
-
-  bool _looksLikeTimeLabel(String label) {
-    return RegExp(r'^[0-9]{1,2}:[0-9]{2}\s*[APap][Mm]$').hasMatch(label);
   }
 
   Future<Uint8List> _buildPdfBytes(_ReportPreviewData report) async {
@@ -1244,8 +1180,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
         return _buildDailyEnvironmentalReport(telemetry, range);
       case _ReportTemplate.mortality:
         return _buildMortalityReport(range);
-      case _ReportTemplate.deviceActivity:
-        return _buildDeviceActivityReport(telemetry, range);
+      case _ReportTemplate.events:
+        return _buildEventsReport(range);
       case _ReportTemplate.maintenance:
         return _buildMaintenanceReport(range);
       case _ReportTemplate.batchSummary:
@@ -1519,125 +1455,67 @@ class _ReportsScreenState extends State<ReportsScreen> {
 */
   }
 
-  _ReportPreviewData _buildDeviceActivityReport(
-    BatchTelemetry telemetry,
-    _ExportRange _,
-  ) {
-    {
-      final deviceItems = _deviceUsageItems();
-      final logs = _reportLogs(telemetry);
-      final enabledCount = deviceItems.where((item) => item.enabled).length;
-      final activeSchedules = deviceItems.fold<int>(
-        0,
-        (sum, item) => sum + item.scheduleCount,
-      );
-      final categoryDeviceCounts = <String, int>{};
-      final categoryScheduleCounts = <String, int>{};
-      for (final item in deviceItems) {
-        categoryDeviceCounts.update(
-          item.category,
-          (value) => value + 1,
-          ifAbsent: () => 1,
-        );
-        categoryScheduleCounts.update(
-          item.category,
-          (value) => value + item.scheduleCount,
-          ifAbsent: () => item.scheduleCount,
-        );
-      }
-
-      final lastLog = logs.isNotEmpty ? logs.last : null;
-      final deviceLines = deviceItems.take(8).map((item) {
-        final status = item.enabled ? 'Connected' : 'Saved';
-        final details = item.description.isEmpty ? '' : ', ${item.description}';
-        return '${item.name} (${item.category}, ${item.id}) - $status, ${item.scheduleCount} active schedule(s)$details';
-      }).toList();
-
-      return _ReportPreviewData(
-        title: 'Device Activity Report',
-        subtitle: 'Current saved devices, active schedules, and live status',
-        summary:
-            '$enabledCount of ${deviceItems.length} saved device(s) are active for ${_selectedBatchItem?.name ?? _selectedBatch}.',
-        stats: [
-          _ReportStatData(
-            label: 'Saved Devices',
-            value: '${deviceItems.length}',
-          ),
-          _ReportStatData(label: 'Connected', value: '$enabledCount'),
-          _ReportStatData(label: 'Active Schedules', value: '$activeSchedules'),
-          _ReportStatData(
-            label: 'Sensor Status',
-            value: telemetry.isLive ? 'Live' : 'Offline',
-          ),
-        ],
-        charts: [
-          _ReportChartData(
-            title: 'Devices by Category',
-            color: PdfColor.fromInt(0xFF2563EB),
-            entries: [
-              for (final category in const [
-                'Water',
-                'Feeder',
-                'Ventilation',
-                'Lighting',
-              ])
-                _ReportChartEntry(
-                  label: category,
-                  value: (categoryDeviceCounts[category] ?? 0).toDouble(),
-                  formattedValue:
-                      '${categoryDeviceCounts[category] ?? 0} device(s)',
-                ),
-            ],
-          ),
-          _ReportChartData(
-            title: 'Active Schedules by Category',
-            color: PdfColor.fromInt(0xFF2E7D32),
-            entries: [
-              for (final category in const [
-                'Water',
-                'Feeder',
-                'Ventilation',
-                'Lighting',
-              ])
-                _ReportChartEntry(
-                  label: category,
-                  value: (categoryScheduleCounts[category] ?? 0).toDouble(),
-                  formattedValue:
-                      '${categoryScheduleCounts[category] ?? 0} active schedule(s)',
-                ),
-            ],
-          ),
-        ],
-        sections: [
-          _ReportPreviewSection(
-            title: 'Connection',
-            lines: [
-              'Status: ${telemetry.isLive ? 'Live' : 'Offline'}',
-              'Last sync: ${DateFormat('MMM d, yyyy h:mm a').format(telemetry.updatedAt)}',
-              'Configured devices: ${deviceItems.isEmpty ? 'No saved devices yet.' : deviceItems.length}',
-            ],
-          ),
-          _ReportPreviewSection(
-            title: 'Saved Devices',
-            lines: [
-              ...deviceLines,
-              if (deviceLines.isEmpty)
-                'No device configurations have been saved for this batch yet.',
-            ],
-          ),
-          _ReportPreviewSection(
-            title: 'Environment Snapshot',
-            lines: [
-              'Current temperature: ${telemetry.temperature.toStringAsFixed(1)} C',
-              'Current humidity: ${telemetry.humidity.toStringAsFixed(0)}%',
-              'Recent telemetry samples: ${logs.length}',
-              if (lastLog != null)
-                'Latest log source: ${lastLog.deviceId} at ${DateFormat('MMM d, yyyy h:mm a').format(lastLog.recordedAt)}',
-            ],
-          ),
-        ],
-      );
+  _ReportPreviewData _buildEventsReport(_ExportRange range) {
+    final entries = _entriesForRange(_currentEvents, range);
+    final recentEvents = entries.take(6).map((entry) {
+      return '${entry.date} | ${entry.title} - ${entry.description}';
+    }).toList();
+    final latestEvent = entries.isNotEmpty ? entries.first : null;
+    final groupedByDate = <String, int>{};
+    for (final entry in entries) {
+      groupedByDate.update(entry.date, (value) => value + 1, ifAbsent: () => 1);
     }
+
+    return _ReportPreviewData(
+      title: 'Events Report',
+      subtitle: '${_exportRangeLabel(range)} farm events and recorded notes',
+      summary:
+          '${entries.length} event record(s) saved for ${_exportRangeLabel(range).toLowerCase()} export of ${_selectedBatchItem?.name ?? _selectedBatch}.',
+      stats: [
+        _ReportStatData(label: 'Records', value: '${entries.length}'),
+        _ReportStatData(
+          label: 'Latest Event',
+          value: latestEvent?.title ?? 'None',
+        ),
+        _ReportStatData(
+          label: 'Latest Date',
+          value: latestEvent?.date ?? 'Not set',
+        ),
+      ],
+      charts: [
+        _ReportChartData(
+          title: 'Events by Date',
+          color: PdfColor.fromInt(0xFFE53935),
+          entries: groupedByDate.entries
+              .take(6)
+              .map(
+                (entry) => _ReportChartEntry(
+                  label: entry.key,
+                  value: entry.value.toDouble(),
+                  formattedValue: '${entry.value} event(s)',
+                ),
+              )
+              .toList(),
+        ),
+      ],
+      sections: [
+        _ReportPreviewSection(
+          title: 'Overview',
+          lines: [
+            'Total event records: ${entries.length}',
+            if (latestEvent != null) 'Latest event: ${latestEvent.title}',
+            if (latestEvent != null) 'Latest date: ${latestEvent.date}',
+            if (latestEvent == null) 'No events have been recorded yet.',
+          ],
+        ),
+        _ReportPreviewSection(
+          title: 'Recent Events',
+          lines: recentEvents.isNotEmpty
+              ? recentEvents
+              : ['Add event records to populate this report.'],
+        ),
+      ],
+    );
 
     /*
     final deviceIds = _dailyLogs.map((log) => log.deviceId).toSet().toList()
@@ -1645,7 +1523,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
     final lastLog = _dailyLogs.isNotEmpty ? _dailyLogs.first : null;
 
     return _ReportPreviewData(
-      title: 'Device Activity Report',
+      title: 'Events Report',
       subtitle: 'Live sensor activity and synchronization status',
       summary:
           '${telemetry.isLive ? 'Device is live' : 'Device is offline'} for ${_selectedBatchItem?.name ?? _selectedBatch}.',
@@ -2583,24 +2461,6 @@ class _ReportPreviewSection {
   final List<String> lines;
 
   const _ReportPreviewSection({required this.title, required this.lines});
-}
-
-class _ReportDeviceUsageItem {
-  final String category;
-  final String name;
-  final String id;
-  final String description;
-  final bool enabled;
-  final int scheduleCount;
-
-  const _ReportDeviceUsageItem({
-    required this.category,
-    required this.name,
-    required this.id,
-    required this.description,
-    required this.enabled,
-    required this.scheduleCount,
-  });
 }
 
 class _CycleProgress {

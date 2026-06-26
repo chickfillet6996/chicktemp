@@ -68,7 +68,6 @@ class _AlertNotificationsScreenState extends State<AlertNotificationsScreen> {
     final preferences = _alertStore.preferences;
     final alerts = _alertStore.alerts;
     final unreadCount = _alertStore.unreadCount;
-    final hasReadAlerts = alerts.any((alert) => alert.isRead);
     final isLoading = _alertStore.isLoading;
 
     return SettingsOverlaySheet(
@@ -133,39 +132,18 @@ class _AlertNotificationsScreenState extends State<AlertNotificationsScreen> {
                                                         ),
                                                       ),
                                                     ),
-                                                    Wrap(
-                                                      spacing: 8,
-                                                      runSpacing: 8,
-                                                      children: [
-                                                        _HeaderActionButton(
-                                                          label:
-                                                              'Mark all read',
-                                                          icon: Icons
-                                                              .check_circle_outline,
-                                                          enabled:
-                                                              alerts.isNotEmpty &&
-                                                              unreadCount > 0,
-                                                          onPressed: () =>
-                                                              unawaited(
-                                                                _alertStore
-                                                                    .markAllRead(),
-                                                              ),
-                                                        ),
-                                                        _HeaderActionButton(
-                                                          label:
-                                                              'Mark all unread',
-                                                          icon: Icons
-                                                              .mark_chat_unread_outlined,
-                                                          enabled:
-                                                              alerts.isNotEmpty &&
-                                                              hasReadAlerts,
-                                                          onPressed: () =>
-                                                              unawaited(
-                                                                _alertStore
-                                                                    .markAllUnread(),
-                                                              ),
-                                                        ),
-                                                      ],
+                                                    _HeaderActionButton(
+                                                      label: 'Mark all read',
+                                                      icon: Icons
+                                                          .check_circle_outline,
+                                                      enabled:
+                                                          alerts.isNotEmpty &&
+                                                          unreadCount > 0,
+                                                      onPressed: () =>
+                                                          unawaited(
+                                                            _alertStore
+                                                                .markAllRead(),
+                                                          ),
                                                     ),
                                                   ],
                                                 ),

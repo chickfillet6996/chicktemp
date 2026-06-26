@@ -48,6 +48,8 @@ class _ControlsScreenState extends State<ControlsScreen> {
   bool _mainLightEnabled = false;
   bool _isManualFeedSending = false;
   bool _isManualWaterSending = false;
+  bool _isVentilationControlSending = false;
+  bool _isLightingControlSending = false;
   final List<_VentilationDevice> _ventilationDevices = [];
   final List<_FeederDevice> _feederDevices = [];
   final List<WaterDevice> _waterDevices = [];
@@ -680,6 +682,44 @@ class _ControlsScreenState extends State<ControlsScreen> {
     }
   }
 
+  Future<void> _runVentilationControlUpdate(
+    Future<void> Function() action,
+  ) async {
+    if (_isVentilationControlSending) {
+      return;
+    }
+
+    setState(() => _isVentilationControlSending = true);
+    try {
+      await Future.wait([
+        action(),
+        Future<void>.delayed(const Duration(milliseconds: 550)),
+      ]);
+    } finally {
+      if (mounted) {
+        setState(() => _isVentilationControlSending = false);
+      }
+    }
+  }
+
+  Future<void> _setVentilationOverride(bool value) {
+    return _runVentilationControlUpdate(() async {
+      if (mounted) {
+        setState(() => _mainFanEnabled = value);
+      }
+      await _persistVentilationConfig(
+        controlEnabledOverride: value,
+        manualOverrideDurationMs: _automationOverrideDurationMs,
+      );
+    });
+  }
+
+  Future<void> _resumeVentilationAuto() {
+    return _runVentilationControlUpdate(() {
+      return _persistVentilationConfig(manualOverrideCancel: true);
+    });
+  }
+
   Future<void> _persistFeederConfig() async {
     try {
       await DeviceConfigStore.instance.saveFeederConfig(
@@ -847,6 +887,44 @@ class _ControlsScreenState extends State<ControlsScreen> {
             : null,
       );
     } on Object catch (_) {}
+  }
+
+  Future<void> _runLightingControlUpdate(
+    Future<void> Function() action,
+  ) async {
+    if (_isLightingControlSending) {
+      return;
+    }
+
+    setState(() => _isLightingControlSending = true);
+    try {
+      await Future.wait([
+        action(),
+        Future<void>.delayed(const Duration(milliseconds: 550)),
+      ]);
+    } finally {
+      if (mounted) {
+        setState(() => _isLightingControlSending = false);
+      }
+    }
+  }
+
+  Future<void> _setLightingOverride(bool value) {
+    return _runLightingControlUpdate(() async {
+      if (mounted) {
+        setState(() => _mainLightEnabled = value);
+      }
+      await _persistLightingConfig(
+        controlEnabledOverride: value,
+        manualOverrideDurationMs: _automationOverrideDurationMs,
+      );
+    });
+  }
+
+  Future<void> _resumeLightingAuto() {
+    return _runLightingControlUpdate(() {
+      return _persistLightingConfig(manualOverrideCancel: true);
+    });
   }
 
   Future<void> _openAddWaterScheduleSheet({
@@ -1244,7 +1322,9 @@ class _ControlsScreenState extends State<ControlsScreen> {
                   builder: (context, _) {
                     final telemetry =
                         MonitoringStore.instance.snapshotFor(widget.batchName);
-                    final displayedFanEnabled = telemetry.isDeviceLive
+                    final displayedFanEnabled = _isVentilationControlSending
+                        ? _mainFanEnabled
+                        : telemetry.isDeviceLive
                         ? telemetry.ventilationFanEnabled
                         : _mainFanEnabled;
                     return _VentilationDropdownCard(
@@ -1253,29 +1333,16 @@ class _ControlsScreenState extends State<ControlsScreen> {
                       masterEnabled: displayedFanEnabled,
                       overrideActive: telemetry.ventilationFanOverrideActive,
                       deviceOnline: telemetry.isDeviceLive,
+                      controlBusy: _isVentilationControlSending,
                       onTapHeader: _toggleVentilation,
                       onToggleMaster: (value) {
-                        setState(() {
-                          _mainFanEnabled = value;
-                        });
-                        _persistVentilationConfig(
-                          controlEnabledOverride: value,
-                          manualOverrideDurationMs:
-                              _automationOverrideDurationMs,
-                        );
+                        _setVentilationOverride(value);
                       },
                       onForceStop: () {
-                        setState(() {
-                          _mainFanEnabled = false;
-                        });
-                        _persistVentilationConfig(
-                          controlEnabledOverride: false,
-                          manualOverrideDurationMs:
-                              _automationOverrideDurationMs,
-                        );
+                        _setVentilationOverride(false);
                       },
                       onResumeAuto: () {
-                        _persistVentilationConfig(manualOverrideCancel: true);
+                        _resumeVentilationAuto();
                       },
                       onDeleteDevice: (index) {
                         setState(() {
@@ -1500,7 +1567,9 @@ class _ControlsScreenState extends State<ControlsScreen> {
                   builder: (context, _) {
                     final telemetry =
                         MonitoringStore.instance.snapshotFor(widget.batchName);
-                    final displayedLightEnabled = telemetry.isDeviceLive
+                    final displayedLightEnabled = _isLightingControlSending
+                        ? _mainLightEnabled
+                        : telemetry.isDeviceLive
                         ? telemetry.lightBulbEnabled
                         : _mainLightEnabled;
                     return LightingSystemDropdownCard(
@@ -1509,29 +1578,16 @@ class _ControlsScreenState extends State<ControlsScreen> {
                       masterEnabled: displayedLightEnabled,
                       overrideActive: telemetry.lightBulbOverrideActive,
                       deviceOnline: telemetry.isDeviceLive,
+                      controlBusy: _isLightingControlSending,
                       onTapHeader: _toggleLighting,
                       onToggleMaster: (value) {
-                        setState(() {
-                          _mainLightEnabled = value;
-                        });
-                        _persistLightingConfig(
-                          controlEnabledOverride: value,
-                          manualOverrideDurationMs:
-                              _automationOverrideDurationMs,
-                        );
+                        _setLightingOverride(value);
                       },
                       onForceStop: () {
-                        setState(() {
-                          _mainLightEnabled = false;
-                        });
-                        _persistLightingConfig(
-                          controlEnabledOverride: false,
-                          manualOverrideDurationMs:
-                              _automationOverrideDurationMs,
-                        );
+                        _setLightingOverride(false);
                       },
                       onResumeAuto: () {
-                        _persistLightingConfig(manualOverrideCancel: true);
+                        _resumeLightingAuto();
                       },
                       onAddSchedule: (index) => _openAddLightingScheduleSheet(
                         deviceId: _lightingDevices[index].id,
@@ -3285,6 +3341,7 @@ class _TempInputBox extends StatelessWidget {
 class _VentilationRelayControlCard extends StatelessWidget {
   final bool enabled;
   final bool overrideActive;
+  final bool busy;
   final ValueChanged<bool> onChanged;
   final VoidCallback onForceStop;
   final VoidCallback onResumeAuto;
@@ -3292,6 +3349,7 @@ class _VentilationRelayControlCard extends StatelessWidget {
   const _VentilationRelayControlCard({
     required this.enabled,
     required this.overrideActive,
+    required this.busy,
     required this.onChanged,
     required this.onForceStop,
     required this.onResumeAuto,
@@ -3372,9 +3430,14 @@ class _VentilationRelayControlCard extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 8),
+              _ControlSpinnerSlot(
+                busy: busy,
+                color: const Color(0xFF24B26A),
+              ),
+              const SizedBox(width: 8),
               Switch(
                 value: enabled,
-                onChanged: onChanged,
+                onChanged: busy ? null : onChanged,
                 activeColor: const Color(0xFF24B26A),
                 activeTrackColor: const Color(0xFFB9EBC9),
                 inactiveThumbColor: Colors.white,
@@ -3390,15 +3453,19 @@ class _VentilationRelayControlCard extends StatelessWidget {
               width: double.infinity,
               height: 40,
               child: FilledButton.icon(
-                onPressed: onResumeAuto,
+                onPressed: busy ? null : onResumeAuto,
                 style: FilledButton.styleFrom(
                   backgroundColor: const Color(0xFF2E7D32),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(14),
                   ),
                 ),
-                icon: const Icon(Icons.autorenew_rounded, size: 17),
-                label: const Text('Resume Temperature Auto'),
+                icon: busy
+                    ? const _ButtonSpinner(color: Colors.white)
+                    : const Icon(Icons.autorenew_rounded, size: 17),
+                label: Text(
+                  busy ? 'Resuming...' : 'Resume Temperature Auto',
+                ),
               ),
             )
                 : enabled
@@ -3407,7 +3474,7 @@ class _VentilationRelayControlCard extends StatelessWidget {
               width: double.infinity,
               height: 40,
               child: OutlinedButton.icon(
-                onPressed: onForceStop,
+                onPressed: busy ? null : onForceStop,
                 style: OutlinedButton.styleFrom(
                   foregroundColor: const Color(0xFFB42318),
                   side: const BorderSide(color: Color(0xFFF1C6C2)),
@@ -3415,8 +3482,12 @@ class _VentilationRelayControlCard extends StatelessWidget {
                     borderRadius: BorderRadius.circular(14),
                   ),
                 ),
-                icon: const Icon(Icons.power_settings_new_rounded, size: 17),
-                label: const Text('Force Stop for 30 Minutes'),
+                icon: busy
+                    ? const _ButtonSpinner(color: Color(0xFFB42318))
+                    : const Icon(Icons.power_settings_new_rounded, size: 17),
+                label: Text(
+                  busy ? 'Stopping...' : 'Force Stop for 30 Minutes',
+                ),
               ),
             )
                     : Container(
@@ -3450,6 +3521,7 @@ class _VentilationDropdownCard extends StatelessWidget {
   final bool masterEnabled;
   final bool overrideActive;
   final bool deviceOnline;
+  final bool controlBusy;
   final VoidCallback onTapHeader;
   final ValueChanged<bool> onToggleMaster;
   final VoidCallback onForceStop;
@@ -3464,6 +3536,7 @@ class _VentilationDropdownCard extends StatelessWidget {
     required this.masterEnabled,
     required this.overrideActive,
     required this.deviceOnline,
+    required this.controlBusy,
     required this.onTapHeader,
     required this.onToggleMaster,
     required this.onForceStop,
@@ -3554,6 +3627,7 @@ class _VentilationDropdownCard extends StatelessWidget {
                   _VentilationRelayControlCard(
                     enabled: masterEnabled,
                     overrideActive: overrideActive,
+                    busy: controlBusy,
                     onChanged: onToggleMaster,
                     onForceStop: onForceStop,
                     onResumeAuto: onResumeAuto,
@@ -3717,6 +3791,54 @@ class _VentilationDropdownCard extends StatelessWidget {
           ],
         ),
         ],
+      ),
+    );
+  }
+}
+
+class _ControlSpinnerSlot extends StatelessWidget {
+  final bool busy;
+  final Color color;
+
+  const _ControlSpinnerSlot({
+    required this.busy,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 18,
+      height: 18,
+      child: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 160),
+        child: busy
+            ? _ButtonSpinner(
+                key: const ValueKey('control-spinner'),
+                color: color,
+              )
+            : const SizedBox.shrink(key: ValueKey('control-idle')),
+      ),
+    );
+  }
+}
+
+class _ButtonSpinner extends StatelessWidget {
+  final Color color;
+
+  const _ButtonSpinner({
+    super.key,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 16,
+      height: 16,
+      child: CircularProgressIndicator(
+        strokeWidth: 2,
+        valueColor: AlwaysStoppedAnimation<Color>(color),
       ),
     );
   }

@@ -10,6 +10,7 @@ import 'device_config_store.dart';
 import 'monitoring_store.dart';
 import 'shared_workspace.dart';
 import 'temperature_settings_store.dart';
+import '../services/local_notification_service.dart';
 
 enum AlertSeverity {
   critical,
@@ -117,21 +118,36 @@ class AlertNotificationStore extends ChangeNotifier {
 
   static const String _preferencesPrefix = 'alert_preferences';
   static const String _readIdsPrefix = 'alert_read_ids';
+  static const String _notifiedIdsPrefix = 'alert_notified_ids';
 
   static final AlertNotificationStore instance = AlertNotificationStore._();
 
   AlertPreferences _preferences = const AlertPreferences();
   List<AlertNotificationItem> _alerts = const [];
   Set<String> _readAlertIds = <String>{};
+  Set<String> _notifiedAlertIds = <String>{};
   bool _isLoading = false;
   bool _isLoaded = false;
   bool _refreshQueued = false;
+  bool _started = false;
   String? _loadedUserId;
 
   AlertPreferences get preferences => _preferences;
   List<AlertNotificationItem> get alerts => List.unmodifiable(_alerts);
   bool get isLoading => _isLoading;
-  int get unreadCount => _alerts.where((alert) => !alert.isRead).length;
+  int get unreadCount => _alerts.length;
+
+  void start() {
+    if (_started) {
+      return;
+    }
+
+    _started = true;
+    BatchStore.instance.addListener(_handleSourceChanged);
+    MonitoringStore.instance.addListener(_handleSourceChanged);
+    TemperatureSettingsStore.instance.addListener(_handleSourceChanged);
+    unawaited(load());
+  }
 
   Future<void> load() async {
     await _ensureLoaded();
@@ -142,11 +158,16 @@ class AlertNotificationStore extends ChangeNotifier {
     _preferences = const AlertPreferences();
     _alerts = const [];
     _readAlertIds = <String>{};
+    _notifiedAlertIds = <String>{};
     _isLoading = false;
     _isLoaded = false;
     _refreshQueued = false;
     _loadedUserId = null;
     notifyListeners();
+  }
+
+  void _handleSourceChanged() {
+    unawaited(refresh());
   }
 
   Future<void> refresh() async {
@@ -164,16 +185,35 @@ class AlertNotificationStore extends ChangeNotifier {
       final generatedAlerts = await _buildAlerts();
       final activeIds = generatedAlerts.map((alert) => alert.id).toSet();
       final nextReadIds = _readAlertIds.intersection(activeIds);
+      final nextNotifiedIds = _notifiedAlertIds.intersection(activeIds);
       final readIdsChanged = nextReadIds.length != _readAlertIds.length;
+      final notifiedIdsChanged =
+          nextNotifiedIds.length != _notifiedAlertIds.length;
       _readAlertIds = nextReadIds;
+      _notifiedAlertIds = nextNotifiedIds;
 
       if (readIdsChanged) {
         await _saveReadAlertIds();
       }
 
-      _alerts = generatedAlerts
-          .map((alert) => alert.copyWith(isRead: _readAlertIds.contains(alert.id)))
+      final visibleAlerts = generatedAlerts
+          .where((alert) => !_readAlertIds.contains(alert.id))
           .toList();
+      final newPopupAlerts = visibleAlerts
+          .where((alert) => !_notifiedAlertIds.contains(alert.id))
+          .toList();
+
+      _alerts = visibleAlerts;
+
+      if (notifiedIdsChanged || newPopupAlerts.isNotEmpty) {
+        _notifiedAlertIds = {
+          ..._notifiedAlertIds,
+          ...newPopupAlerts.map((alert) => alert.id),
+        };
+        await _saveNotifiedAlertIds();
+      }
+
+      unawaited(_showNewAlertPopups(newPopupAlerts));
     } finally {
       _isLoading = false;
       notifyListeners();
@@ -192,21 +232,12 @@ class AlertNotificationStore extends ChangeNotifier {
     await refresh();
   }
 
-  Future<void> toggleRead(String alertId) async {
-    if (_readAlertIds.contains(alertId)) {
-      _readAlertIds.remove(alertId);
-    } else {
-      _readAlertIds.add(alertId);
-    }
+  Future<void> toggleRead(String alertId) => markRead(alertId);
 
+  Future<void> markRead(String alertId) async {
+    _readAlertIds.add(alertId);
     await _saveReadAlertIds();
-    _alerts = _alerts
-        .map(
-          (alert) => alert.id == alertId
-              ? alert.copyWith(isRead: _readAlertIds.contains(alertId))
-              : alert,
-        )
-        .toList();
+    _alerts = _alerts.where((alert) => alert.id != alertId).toList();
     notifyListeners();
   }
 
@@ -220,19 +251,7 @@ class AlertNotificationStore extends ChangeNotifier {
       ..._alerts.map((alert) => alert.id),
     };
     await _saveReadAlertIds();
-    _alerts = _alerts.map((alert) => alert.copyWith(isRead: true)).toList();
-    notifyListeners();
-  }
-
-  Future<void> markAllUnread() async {
-    if (_alerts.isEmpty || _readAlertIds.isEmpty) {
-      return;
-    }
-
-    final activeIds = _alerts.map((alert) => alert.id).toSet();
-    _readAlertIds.removeAll(activeIds);
-    await _saveReadAlertIds();
-    _alerts = _alerts.map((alert) => alert.copyWith(isRead: false)).toList();
+    _alerts = const [];
     notifyListeners();
   }
 
@@ -245,6 +264,7 @@ class AlertNotificationStore extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     final rawPreferences = prefs.getString(_preferencesKey(userId));
     final rawReadIds = prefs.getStringList(_readIdsKey(userId));
+    final rawNotifiedIds = prefs.getStringList(_notifiedIdsKey(userId));
 
     if (rawPreferences != null && rawPreferences.isNotEmpty) {
       final decoded = jsonDecode(rawPreferences);
@@ -258,6 +278,7 @@ class AlertNotificationStore extends ChangeNotifier {
     }
 
     _readAlertIds = {...?rawReadIds};
+    _notifiedAlertIds = {...?rawNotifiedIds};
     _loadedUserId = userId;
     _isLoaded = true;
   }
@@ -276,6 +297,38 @@ class AlertNotificationStore extends ChangeNotifier {
       _readIdsKey(_currentUserKey),
       _readAlertIds.toList()..sort(),
     );
+  }
+
+  Future<void> _saveNotifiedAlertIds() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(
+      _notifiedIdsKey(_currentUserKey),
+      _notifiedAlertIds.toList()..sort(),
+    );
+  }
+
+  Future<void> _showNewAlertPopups(
+    List<AlertNotificationItem> alerts,
+  ) async {
+    if (alerts.isEmpty) {
+      return;
+    }
+
+    final alert = alerts.first;
+    final extraCount = alerts.length - 1;
+    final body = extraCount == 0
+        ? alert.subtitle
+        : '${alert.subtitle} +$extraCount more alert${extraCount == 1 ? '' : 's'}.';
+
+    try {
+      await LocalNotificationService.instance.showAlert(
+        id: alert.id,
+        title: alert.title,
+        body: body,
+      );
+    } on Object {
+      // Alert refresh should never fail just because the OS rejected a popup.
+    }
   }
 
   Future<List<AlertNotificationItem>> _buildAlerts() async {
@@ -575,6 +628,9 @@ class AlertNotificationStore extends ChangeNotifier {
       SharedWorkspace.localKey('${_preferencesPrefix}_$userKey');
   String _readIdsKey(String userKey) =>
       SharedWorkspace.localKey('${_readIdsPrefix}_$userKey');
+
+  String _notifiedIdsKey(String userKey) =>
+      SharedWorkspace.localKey('${_notifiedIdsPrefix}_$userKey');
 }
 
 class _ParsedSchedule {

@@ -66,6 +66,7 @@ class LightingSystemDropdownCard extends StatelessWidget {
   final bool masterEnabled;
   final bool overrideActive;
   final bool deviceOnline;
+  final bool controlBusy;
   final VoidCallback onTapHeader;
   final ValueChanged<bool> onToggleMaster;
   final VoidCallback onForceStop;
@@ -83,6 +84,7 @@ class LightingSystemDropdownCard extends StatelessWidget {
     required this.masterEnabled,
     required this.overrideActive,
     required this.deviceOnline,
+    required this.controlBusy,
     required this.onTapHeader,
     required this.onToggleMaster,
     required this.onForceStop,
@@ -174,6 +176,7 @@ class LightingSystemDropdownCard extends StatelessWidget {
                   _LightingRelayControlCard(
                     enabled: masterEnabled,
                     overrideActive: overrideActive,
+                    busy: controlBusy,
                     onChanged: onToggleMaster,
                     onForceStop: onForceStop,
                     onResumeAuto: onResumeAuto,
@@ -219,6 +222,7 @@ class LightingSystemDropdownCard extends StatelessWidget {
 class _LightingRelayControlCard extends StatelessWidget {
   final bool enabled;
   final bool overrideActive;
+  final bool busy;
   final ValueChanged<bool> onChanged;
   final VoidCallback onForceStop;
   final VoidCallback onResumeAuto;
@@ -226,6 +230,7 @@ class _LightingRelayControlCard extends StatelessWidget {
   const _LightingRelayControlCard({
     required this.enabled,
     required this.overrideActive,
+    required this.busy,
     required this.onChanged,
     required this.onForceStop,
     required this.onResumeAuto,
@@ -306,9 +311,14 @@ class _LightingRelayControlCard extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 8),
+              _LightingControlSpinnerSlot(
+                busy: busy,
+                color: const Color(0xFFD28A00),
+              ),
+              const SizedBox(width: 8),
               Switch(
                 value: enabled,
-                onChanged: onChanged,
+                onChanged: busy ? null : onChanged,
                 activeColor: const Color(0xFFD28A00),
                 activeTrackColor: const Color(0xFFFFE9A8),
                 inactiveThumbColor: Colors.white,
@@ -324,15 +334,19 @@ class _LightingRelayControlCard extends StatelessWidget {
               width: double.infinity,
               height: 40,
               child: FilledButton.icon(
-                onPressed: onResumeAuto,
+                onPressed: busy ? null : onResumeAuto,
                 style: FilledButton.styleFrom(
                   backgroundColor: const Color(0xFFD28A00),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(14),
                   ),
                 ),
-                icon: const Icon(Icons.autorenew_rounded, size: 17),
-                label: const Text('Resume Temperature Auto'),
+                icon: busy
+                    ? const _LightingButtonSpinner(color: Colors.white)
+                    : const Icon(Icons.autorenew_rounded, size: 17),
+                label: Text(
+                  busy ? 'Resuming...' : 'Resume Temperature Auto',
+                ),
               ),
             )
                 : enabled
@@ -341,7 +355,7 @@ class _LightingRelayControlCard extends StatelessWidget {
               width: double.infinity,
               height: 40,
               child: OutlinedButton.icon(
-                onPressed: onForceStop,
+                onPressed: busy ? null : onForceStop,
                 style: OutlinedButton.styleFrom(
                   foregroundColor: const Color(0xFFB42318),
                   side: const BorderSide(color: Color(0xFFF1C6C2)),
@@ -349,8 +363,12 @@ class _LightingRelayControlCard extends StatelessWidget {
                     borderRadius: BorderRadius.circular(14),
                   ),
                 ),
-                icon: const Icon(Icons.power_settings_new_rounded, size: 17),
-                label: const Text('Force Stop for 30 Minutes'),
+                icon: busy
+                    ? const _LightingButtonSpinner(color: Color(0xFFB42318))
+                    : const Icon(Icons.power_settings_new_rounded, size: 17),
+                label: Text(
+                  busy ? 'Stopping...' : 'Force Stop for 30 Minutes',
+                ),
               ),
             )
                     : Container(
@@ -520,6 +538,54 @@ class _LightingDeviceCard extends StatelessWidget {
             ],
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _LightingControlSpinnerSlot extends StatelessWidget {
+  final bool busy;
+  final Color color;
+
+  const _LightingControlSpinnerSlot({
+    required this.busy,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 18,
+      height: 18,
+      child: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 160),
+        child: busy
+            ? _LightingButtonSpinner(
+                key: const ValueKey('lighting-control-spinner'),
+                color: color,
+              )
+            : const SizedBox.shrink(key: ValueKey('lighting-control-idle')),
+      ),
+    );
+  }
+}
+
+class _LightingButtonSpinner extends StatelessWidget {
+  final Color color;
+
+  const _LightingButtonSpinner({
+    super.key,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 16,
+      height: 16,
+      child: CircularProgressIndicator(
+        strokeWidth: 2,
+        valueColor: AlwaysStoppedAnimation<Color>(color),
       ),
     );
   }
